@@ -51,6 +51,27 @@ pub fn toggle_panel(app: &tauri::AppHandle) {
     }
 }
 
+/// 解析数据目录。
+///
+/// 默认用 Tauri 的 `app_data_dir()`（Windows：`%APPDATA%\<identifier>`）；
+/// 允许用环境变量 `PPCLIP_DATA_DIR` 覆盖 —— 主要给自动化冒烟测试用
+/// （受限环境里 `%APPDATA%` 可能不可写）。
+///
+/// 注意：asset protocol 的 scope 固定为 `$APPDATA/**`，
+/// 覆盖数据目录后前端加载图片会失败，所以别拿它当正经的「便携模式」。
+fn resolve_data_dir(app: &tauri::AppHandle) -> std::io::Result<PathBuf> {
+    if let Ok(custom) = std::env::var("PPCLIP_DATA_DIR") {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+
+    app.path()
+        .app_data_dir()
+        .map_err(|e| std::io::Error::other(e.to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -73,11 +94,14 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&data_dir)?;
+            let data_dir = resolve_data_dir(app.handle())?;
+            std::fs::create_dir_all(&data_dir)
+                .map_err(|e| format!("创建数据目录 {} 失败: {e}", data_dir.display()))?;
 
             // 日志：控制台 + <data_dir>/logs/ppclip.log
-            app.handle().plugin(logger::init_plugin(&data_dir))?;
+            app.handle()
+                .plugin(logger::init_plugin(&data_dir))
+                .map_err(|e| format!("初始化日志失败: {e}"))?;
 
             log::info!(
                 "PPClip v{} 启动，数据目录 {}",
@@ -117,6 +141,26 @@ pub fn run() {
 
             // 恢复上次钉在桌面上的贴图
             pins::restore_pins(app.handle());
+
+            // 便于脚本化与冒烟测试：启动后完成一次全屏截图并退出
+            // （截图结果照常写剪贴板 + 进历史）
+            if std::env::args().any(|arg| arg == "--capture-fullscreen") {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    let code = match capture::capture_fullscreen(&handle) {
+                        Ok(()) => {
+                            log::info!("--capture-fullscreen 完成");
+                            0
+                        }
+                        Err(err) => {
+                            log::error!("--capture-fullscreen 失败: {err}");
+                            1
+                        }
+                    };
+                    handle.exit(code);
+                });
+            }
 
             Ok(())
         })

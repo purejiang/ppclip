@@ -50,7 +50,8 @@ export const api = {
   getPin: (id: number) => invoke<Pin>("get_pin", { id }),
   deletePin: (id: number) => invoke<void>("delete_pin", { id }),
   updatePinGeometry: (id: number, x: number, y: number, w: number, h: number) =>
-    invoke<void>("update_pin_geometry", { id, x, y, w, h }),
+    // zoom 显式传 null：保持 Rust 侧记录的缩放值，不依赖「缺字段」的隐式语义
+    invoke<void>("update_pin_geometry", { id, x, y, w, h, zoom: null }),
   zoomPin: (id: number, direction: 1 | -1) =>
     invoke<Pin>("zoom_pin", { id, direction }),
   showPinMenu: (id: number) => invoke<void>("show_pin_menu", { id }),

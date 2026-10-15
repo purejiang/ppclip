@@ -39,11 +39,17 @@ cd src-tauri && cargo test    # Rust 单元测试
 cd src-tauri && cargo check   # Rust 类型检查
 ```
 
+命令行截图（给脚本/冒烟测试用，结果照常写剪贴板并进历史）：
+
+```bash
+ppclip.exe --capture-fullscreen
+```
+
 打包产物：`src-tauri/target/release/bundle/nsis/PPClip_0.1.0_x64-setup.exe`
 
 ## 数据位置
 
-`%APPDATA%\com.ppclip.app\`
+`%APPDATA%\com.purejiang.ppclip\`
 
 | 路径 | 内容 |
 |---|---|
@@ -52,6 +58,23 @@ cd src-tauri && cargo check   # Rust 类型检查
 | `cache/overlay.png` | 截图时的冻结图（用完即删） |
 | `settings.json` | 历史上限、图片上限、悬浮球/面板位置 |
 | `logs/ppclip.log` | 运行日志 |
+
+## 在受限环境（沙箱 / 自动化）里运行
+
+正常安装使用不需要看这段。若启动即报 `Failed to setup app: 拒绝访问。 (os error 5)`，
+说明当前环境不允许它写用户目录 —— Tauri 会先按 `tauri.conf.json` 建窗口，
+而 WebView2 要在 `%LOCALAPPDATA%\<identifier>` 下建自己的用户数据目录，
+这一步失败就会直接 panic。两个环境变量可以把数据导到可写位置：
+
+```powershell
+$env:WEBVIEW2_USER_DATA_FOLDER = 'D:\tmp\ppclip-webview2'   # WebView2 用户数据目录
+$env:PPCLIP_DATA_DIR           = 'D:\tmp\ppclip-data'       # PPClip 数据目录
+.\ppclip.exe --capture-fullscreen                            # 附带：命令行全屏截图
+```
+
+`PPCLIP_DATA_DIR` 只改数据位置，asset protocol 的 scope 仍固定为 `$APPDATA/**`，
+所以这样跑起来时面板里的缩略图不会显示（日志会出现
+`asset protocol not configured to allow the path`），属预期行为。
 
 ## 已知限制（v1 有意不做）
 

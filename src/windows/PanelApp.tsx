@@ -58,8 +58,8 @@ export default function PanelApp() {
   }, [query]);
 
   // 挂载时拉一次数据；之后由 clips:changed / pins:changed 事件驱动刷新
-  // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- 面板是外部数据源，挂载即取
     void refresh();
   }, [refresh]);
 

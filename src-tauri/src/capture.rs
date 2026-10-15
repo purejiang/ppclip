@@ -141,13 +141,22 @@ pub fn finish_region_selection(
     result.map(|_| ())
 }
 
-/// 全屏截图：直接抓光标所在显示器
+/// 全屏截图：直接抓光标所在显示器。
+///
+/// 抓之前要把自己的窗口藏起来，否则悬浮球/面板会出现在图里；
+/// 藏完稍等一下再抓，留给合成器一帧时间。
 pub fn capture_fullscreen(app: &AppHandle) -> Result<(), String> {
     let monitor = locate_monitor(app)?;
-    let image = monitor
-        .capture_image()
-        .map_err(|e| format!("抓取屏幕失败: {e}"))?;
-    commit_capture(app, &image).map(|_| ())
+    let restore = hide_own_windows(app);
+    std::thread::sleep(std::time::Duration::from_millis(120));
+
+    let result = match monitor.capture_image() {
+        Ok(image) => commit_capture(app, &image).map(|_| ()),
+        Err(err) => Err(format!("抓取屏幕失败: {err}")),
+    };
+
+    restore_windows(app, &restore);
+    result
 }
 
 #[tauri::command]

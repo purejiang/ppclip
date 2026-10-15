@@ -14,6 +14,9 @@ npm run build         # 仅前端（tsc -b && vite build）—— 会生成 dist
 npm run lint          # oxlint
 cd src-tauri && cargo test    # Rust 单元测试
 cd src-tauri && cargo check   # Rust 类型检查
+
+# 无需点击即可验证截图链路（写剪贴板 + 进历史后自动退出，退出码 0/1）
+./src-tauri/target/release/ppclip.exe --capture-fullscreen
 ```
 
 **注意**：
@@ -101,6 +104,19 @@ cd src-tauri && cargo check   # Rust 类型检查
 3. 混合 DPI 多显示器：只支持在光标所在屏幕内完成选区，跨屏选区未实现。
 4. 悬浮球与贴图依赖窗口透明；若渲染成黑底方块，回退方案改成不透明圆角窗口。
 5. 重新编译前 `ppclip.exe` 必须退出（os error 5）。
+6. **调试「启动就 panic」的正确姿势**：Tauri 在 `setup` 阶段会**先**按 `tauri.conf.json`
+   创建窗口（`WebviewWindowBuilder::from_config(...)?.build()?`），**之后**才调用我们注册的
+   setup 闭包。所以窗口 / WebView2 初始化失败也会报成 `Failed to setup app: ...`，
+   而我们闭包里的日志一行都不会打 —— 别一上来就怀疑数据目录。
+   给 setup 每一步加错误上下文（本次就是这么做的）能立刻区分是哪一步：
+   ```text
+   Failed to setup app: error encountered during setup hook: 创建数据目录 C:\...\com.purejiang.ppclip 失败: 拒绝访问。 (os error 5)
+   ```
+7. 受限环境（沙箱 / 自动化）里跑起来需要两个环境变量：
+   `WEBVIEW2_USER_DATA_FOLDER`（WebView2 用户数据目录，默认在 `%LOCALAPPDATA%`）与
+   `PPCLIP_DATA_DIR`（PPClip 数据目录）。后者会让 asset protocol 报 scope 不允许，
+   缩略图不显示，属预期。
+8. `Get-ChildItem <不存在的目录> -Recurse` 在本机沙箱里会挂起，探路径前先用 `Test-Path`。
 
 ## 发布
 
