@@ -1,0 +1,45 @@
+[package]
+name = "ppclip"
+version = "0.1.0"
+description = "Lightweight clipboard history, screenshot and desktop pinning for Windows"
+authors = ["purejiang"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# GUI 入口不需要测试目标：否则 `cargo test` 会去执行 main.rs，
+# 等于把应用真的启动一遍。
+[[bin]]
+name = "ppclip"
+path = "src/main.rs"
+test = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-log = "2"
+tauri-plugin-single-instance = "2"
+rusqlite = { version = "0.31", features = ["bundled"] }
+clipboard-rs = "0.3"
+xcap = "0.9"
+image = "0.25"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+log = "0.4"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+# MSVC 在本机做 C 编译时，带调试信息会触发 cl 的 D8050（无法启动 c1.dll）。
+# 只给 SQLite 关掉调试信息绕过，Rust 侧依旧保留调试符号。
+[profile.dev.package.libsqlite3-sys]
+debug = false
