@@ -61,20 +61,24 @@ ppclip.exe --capture-fullscreen
 
 ## 在受限环境（沙箱 / 自动化）里运行
 
-正常安装使用不需要看这段。若启动即报 `Failed to setup app: 拒绝访问。 (os error 5)`，
-说明当前环境不允许它写用户目录 —— Tauri 会先按 `tauri.conf.json` 建窗口，
-而 WebView2 要在 `%LOCALAPPDATA%\<identifier>` 下建自己的用户数据目录，
-这一步失败就会直接 panic。两个环境变量可以把数据导到可写位置：
+正常安装使用不需要看这段。应用启动时会**自己探测数据目录能不能写**，按顺序尝试：
+
+1. `%APPDATA%\<identifier>` —— 标准位置，与 asset protocol 的 `$APPDATA/**` 对得上
+2. `%LOCALAPPDATA%\<identifier>` —— `$APPLOCALDATA/**`
+3. `<exe 同级>/ppclip-data` —— 便携兜底，`$EXE/**`
+
+前一个写不了就用下一个，并在日志里留一条
+`WARN 标准数据目录 ... 不可写，已改用 ...`。**沙箱终端（例如 DSH 的开发终端）就是这种情况**：
+除项目目录外都写不了，它会自动落到第 2 或第 3 个位置 —— 所以 `npm run tauri:dev` 照常能跑，
+缩略图也照常显示（这三种位置都在 asset protocol 的 scope 里）。
+
+想手动指定位置就用环境变量。注意自定义位置**不在** scope 里，
+面板里的缩略图会加载不出来（日志出现 `asset protocol not configured to allow the path`）：
 
 ```powershell
-$env:WEBVIEW2_USER_DATA_FOLDER = 'D:\tmp\ppclip-webview2'   # WebView2 用户数据目录
-$env:PPCLIP_DATA_DIR           = 'D:\tmp\ppclip-data'       # PPClip 数据目录
-.\ppclip.exe --capture-fullscreen                            # 附带：命令行全屏截图
+$env:PPCLIP_DATA_DIR = 'D:\tmp\ppclip-data'
+.\ppclip.exe --capture-fullscreen     # 附带：命令行全屏截图，写完剪贴板与历史后自动退出
 ```
-
-`PPCLIP_DATA_DIR` 只改数据位置，asset protocol 的 scope 仍固定为 `$APPDATA/**`，
-所以这样跑起来时面板里的缩略图不会显示（日志会出现
-`asset protocol not configured to allow the path`），属预期行为。
 
 ## 已知限制（v1 有意不做）
 

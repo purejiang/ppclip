@@ -112,10 +112,15 @@ cd src-tauri && cargo check   # Rust 类型检查
    ```text
    Failed to setup app: error encountered during setup hook: 创建数据目录 C:\...\com.purejiang.ppclip 失败: 拒绝访问。 (os error 5)
    ```
-7. 受限环境（沙箱 / 自动化）里跑起来需要两个环境变量：
-   `WEBVIEW2_USER_DATA_FOLDER`（WebView2 用户数据目录，默认在 `%LOCALAPPDATA%`）与
-   `PPCLIP_DATA_DIR`（PPClip 数据目录）。后者会让 asset protocol 报 scope 不允许，
-   缩略图不显示，属预期。
+7. **受限环境（沙箱 / 自动化）已经自动适配**：`run()` 里在 Builder 之前调
+   `resolve_data_dir_early()`，按 `PPCLIP_DATA_DIR` → `%APPDATA%\<id>` →
+   `%LOCALAPPDATA%\<id>` → `<exe 同级>/ppclip-data` 顺序**实测可写性**（建目录 + 写探测文件），
+   命中回退时顺手把 `WEBVIEW2_USER_DATA_FOLDER` 一起挪过去，否则窗口创建会先失败。
+   正常环境走标准位置，行为不变。
+   注意 asset protocol 的 scope 必须覆盖所有可能的数据目录
+   （当前是 `$APPDATA/**`、`$APPLOCALDATA/**`、`$EXE/**`；其中 `$EXE` 是 exe 所在**目录**），
+   否则那一种模式下缩略图加载不出来。用户自己指定到别处的 `PPCLIP_DATA_DIR`
+   不在 scope 里，缩略图不显示属预期。
 8. `Get-ChildItem <不存在的目录> -Recurse` 在本机沙箱里会挂起，探路径前先用 `Test-Path`。
 
 ## 发布

@@ -51,14 +51,69 @@ pub fn toggle_panel(app: &tauri::AppHandle) {
     }
 }
 
+/// 目录能不能真写：建目录 + 写一个探测文件（只有真写成功才算数）
+fn is_writable(dir: &std::path::Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(".ppclip-write-probe");
+    let ok = std::fs::write(&probe, b"ppclip").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
+}
+
+/// 在 Tauri 建窗**之前**把数据目录定下来。
+///
+/// 窗口（以及 WebView2 自己的用户数据目录）是在 Tauri 的 setup 阶段、先于我们注册的
+/// 闭包创建出来的，所以这件事不能等到闭包里再做 —— 否则受限环境会直接
+/// `Failed to setup app: 拒绝访问`。
+///
+/// 正常走 `%APPDATA%\<identifier>`（与 tauri.conf.json 里 asset protocol 的
+/// `$APPDATA/**` 对得上）；写不了（沙箱 / 受限企业环境）时依次回退到
+/// `%LOCALAPPDATA%\<identifier>`、`<exe 同级>/ppclip-data`。
+/// 返回 `(目录, 是否走了覆盖或回退)`。
+fn resolve_data_dir_early(identifier: &str) -> (PathBuf, bool) {
+    if let Ok(custom) = std::env::var("PPCLIP_DATA_DIR") {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            return (PathBuf::from(trimmed), true);
+        }
+    }
+
+    let standard = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .map(|base| base.join(identifier));
+    if let Some(dir) = &standard {
+        if is_writable(dir) {
+            return (dir.clone(), false);
+        }
+    }
+
+    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+        let dir = PathBuf::from(base).join(identifier);
+        if is_writable(&dir) {
+            return (dir, true);
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let dir = parent.join("ppclip-data");
+            if is_writable(&dir) {
+                return (dir, true);
+            }
+        }
+    }
+
+    // 都写不了：仍旧用标准位置，让 setup 里的报错把原因讲清楚
+    (standard.unwrap_or_else(|| PathBuf::from(".")), false)
+}
+
 /// 解析数据目录。
 ///
 /// 默认用 Tauri 的 `app_data_dir()`（Windows：`%APPDATA%\<identifier>`）；
-/// 允许用环境变量 `PPCLIP_DATA_DIR` 覆盖 —— 主要给自动化冒烟测试用
-/// （受限环境里 `%APPDATA%` 可能不可写）。
-///
-/// 注意：asset protocol 的 scope 固定为 `$APPDATA/**`，
-/// 覆盖数据目录后前端加载图片会失败，所以别拿它当正经的「便携模式」。
+/// `resolve_data_dir_early` 决定走覆盖/回退时会把 `PPCLIP_DATA_DIR` 设好，
+/// 这里优先读它
 fn resolve_data_dir(app: &tauri::AppHandle) -> std::io::Result<PathBuf> {
     if let Ok(custom) = std::env::var("PPCLIP_DATA_DIR") {
         let trimmed = custom.trim();
@@ -74,6 +129,15 @@ fn resolve_data_dir(app: &tauri::AppHandle) -> std::io::Result<PathBuf> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+
+    // 必须早于 Builder：窗口与 WebView2 的目录要在这时就定好
+    let (early_dir, custom) = resolve_data_dir_early(&context.config().identifier);
+    if custom {
+        std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", early_dir.join("webview2"));
+        std::env::set_var("PPCLIP_DATA_DIR", &early_dir);
+    }
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             log::info!("检测到第二个实例，唤醒已有悬浮球与面板");
@@ -108,6 +172,17 @@ pub fn run() {
                 app.package_info().version,
                 data_dir.display()
             );
+
+            // 走了回退/覆盖就说明标准位置写不了，明确记一笔方便排查
+            if let Ok(standard) = app.path().app_data_dir() {
+                if standard != data_dir {
+                    log::warn!(
+                        "标准数据目录 {} 不可写，已改用 {}",
+                        standard.display(),
+                        data_dir.display()
+                    );
+                }
+            }
 
             // 状态必须在监听线程启动前挂好：监听线程会 try_state 这些状态
             let storage = storage::Storage::new(&data_dir)?;
