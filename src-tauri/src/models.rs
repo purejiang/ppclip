@@ -14,6 +14,10 @@ pub struct AppSettings {
     /// 悬浮球位置（物理像素，None = 首次启动用默认位置）
     pub ball_x: Option<i32>,
     pub ball_y: Option<i32>,
+    /// 悬浮球不透明度（20~100，%）
+    pub ball_opacity: i64,
+    /// 面板里单击条目直接复制（false = 单击看详情，Ctrl+Enter 才是复制）
+    pub click_to_copy: bool,
     /// 面板位置（物理像素，None = 居中显示）
     pub panel_x: Option<i32>,
     pub panel_y: Option<i32>,
@@ -26,6 +30,8 @@ impl Default for AppSettings {
             max_image_mb: 200,
             ball_x: None,
             ball_y: None,
+            ball_opacity: 100,
+            click_to_copy: false,
             panel_x: None,
             panel_y: None,
         }

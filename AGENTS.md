@@ -31,7 +31,9 @@ cd src-tauri && cargo check   # Rust 类型检查
 
 **Tauri 2 + React 19 + TypeScript + Vite + oxlint + rusqlite(bundled) + SQLite**
 
-不引入 UI 组件库、状态管理库、i18n 库：界面用 CSS 变量手写（同 openstart 风格）。
+不引入 UI 组件库、状态管理库、i18n 库、图标字体：界面用 CSS 变量手写（同 openstart 风格），
+图标是 `src/components/icons.tsx` 里的手写 SVG。视觉稿来自 stitch 的
+「floatclip desktop manager」（Glacier 玻璃主题 + 桌面悬浮球三态规范）。
 
 ## 架构
 
@@ -40,10 +42,11 @@ cd src-tauri && cargo check   # Rust 类型检查
 | 文件 | 职责 | 注意 |
 |---|---|---|
 | `lib.rs` | 启动、状态注册、菜单事件、窗口事件、invoke_handler、退出钩子 | 状态必须**先** `manage` 再启动监听线程 |
-| `ballhub.rs` | 悬浮球的悬停枢纽态：把 56×56 的球窗撑成 240×240（球心不动）再还原 | 撑着 / 收起都按「窗口中心 = 球心」算；收起尺寸用**实测值**（见已知问题 12） |
+| `ballhub.rs` | 悬浮入口三态：16×64 贴边胶囊 ↔ 52×52 常规球 ↔ 200×200 HUD 轮盘（形状中心不动），外加贴边吸附 | 吸附 / 撑窗都按「形状中心」算；收起尺寸用**实测值**（见已知问题 12）；展开时轮盘要钳进显示器 |
 | `clipboard.rs` | 剪贴板监听线程、内容过滤、去重入库、自身写入抑制 | `start_watch()` 阻塞，必须独立线程；`SelfWrite` 见下 |
 | `capture.rs` | 截图：显示器定位、冻结图、overlay 窗口、裁剪、写剪贴板入库 | `clamp_rect` 是纯函数，有单测 |
 | `storage.rs` | SQLite：建表/迁移、clips 与 pins 的 CRUD、去重、LRU 淘汰 | **最大文件**，改淘汰逻辑务必跑单测 |
+| `autostart.rs` | 开机自启：读写 `HKCU\...\CurrentVersion\Run` | **注册表是唯一真相**（settings.json 不存这个字段）；只申请 `KEY_QUERY_VALUE` / `KEY_SET_VALUE` |
 | `commands.rs` | 所有 `#[tauri::command]` + 菜单复用的 `*_impl` 内部函数 | 命令与 `api.ts` 必须两端同步 |
 | `pins.rs` | 贴图窗口的创建/恢复/关闭、缩放、初始几何 | 几何一律用 **physical** 值 |
 | `viewer.rs` | 完整内容窗口：单例（label `viewer`）、初始尺寸、贴在面板旁边 | 内容由 `ViewerState` 决定，`viewer:show` 事件只当「去问一次」的提示 |
@@ -57,30 +60,31 @@ cd src-tauri && cargo check   # Rust 类型检查
 
 | 文件 | 职责 |
 |---|---|
-| `main.tsx` | 单入口按窗口 label 分发（ball / main / overlay / pin-*） |
-| `api.ts` | `invoke()` 类型化包装、`assetUrl()`、数据目录缓存 |
-| `windows/PanelApp.tsx` | 历史面板：搜索、筛选、键盘导航、点击复制 |
-| `windows/BallApp.tsx` | 悬浮球：拖动 vs 点击判定、右键调用原生菜单、悬停 0.3 秒撑成枢纽态（中心球 + 四个环绕按钮） |
+| `main.tsx` | 单入口按窗口 label 分发（ball / main / overlay / viewer / pin-*） |
+| `api.ts` | `invoke()` 类型化包装、`assetUrl()`、数据目录缓存、事件订阅（ball:state / panel:visible / settings:changed / clips / pins） |
+| `windows/PanelApp.tsx` | 历史面板：搜索、胶囊筛选（含「单击即复制」闪电）、键盘导航、状态条；**设置页是同一扇窗的第二屏** |
+| `windows/BallApp.tsx` | 悬浮入口三态：贴边胶囊 / 常规球 / HUD 轮盘；拖动 vs 点击判定、右键原生菜单、悬停 0.3 秒展开、新条目角标、不透明度 |
 | `windows/OverlayApp.tsx` | 截图选区：冻结图为背景 + 四块遮罩 + 尺寸提示 + 确定/取消 |
 | `windows/PinApp.tsx` | 桌面贴图：拖动回写、滚轮缩放、关闭 |
-| `windows/ViewerApp.tsx` | 完整内容窗口：全文（可选中复制）/ 原图（适应窗口 ↔ 原始尺寸） |
-| `components/ClipRow.tsx` | 单条历史：预览 + 第二行时间 + 右侧复制 / 删除图标（单击行看详情） |
-| `components/SettingsSheet.tsx` | 设置弹层 |
-| `styles/index.css` | 设计系统 + 各窗口样式（按 `html[data-window]` 切底色） |
+| `windows/ViewerApp.tsx` | 完整内容窗口：meta 条、点阵画布、缩放控件、复制/贴图（toggle）+ toast 提示 |
+| `components/ClipRow.tsx` | 单条历史：40×40 类型图标块 + 预览/缩略图 + 两行 meta + 复制 / 贴图 / 删除 |
+| `components/SettingsPage.tsx` | 设置页（容量 / 数据目录 / 悬浮球 / 开机自启，卡片 + 滑杆 + 分段 + 开关） |
+| `components/icons.tsx` | 全应用共享的线性图标集（24 网格、1.7 描边、`currentColor`），**图标一律从这里取** |
+| `styles/index.css` | Glacier 设计系统（玻璃 + 冰蓝）+ 各窗口样式（按 `html[data-window]` 切底色） |
 
 ### 窗口
 
 | label | 关键配置 | 说明 |
 |---|---|---|
-| `ball` | 56×56、transparent、alwaysOnTop、skipTaskbar、`visible:false` | 前端挂载后调 `show_ball` 命令显示，避免白闪（别用 JS 的 `show()`，见已知问题 9）；鼠标停满 0.3 秒后由 `ballhub` 撑成 240×240，见设计决策 13 |
-| `main` | 420×560、不透明、alwaysOnTop、skipTaskbar、`visible:false` | 关闭事件被拦截 → 只隐藏；标题栏任意处可拖，位置回写 settings.json |
+| `ball` | 16×64（运行时按形态变 52×52）、transparent、alwaysOnTop、skipTaskbar、`visible:false` | 稿子里的**桌面悬浮球三态**：前端挂载后调 `show_ball` 显示；Rust 启动时 / 每次拖动结束后 `ballhub::dock` 决定「贴边胶囊」还是「常规球」，鼠标停满 0.3 秒后撑成 200×200 的 HUD 轮盘，见设计决策 13 |
+| `main` | 420×600、transparent（圆角玻璃卡片）、alwaysOnTop、skipTaskbar、`visible:false` | 关闭事件被拦截 → 只隐藏；标题栏任意处可拖，位置回写 settings.json；**设置页是这扇窗的第二屏** |
 | `overlay` | 运行时创建，覆盖光标显示器**物理**范围，不透明 | 先抓图后建窗，抓图时不会把自己拍进去；拖出选区后停在「确定 / 取消」，不自动提交 |
 | `pin-<id>` | 运行时创建，transparent、alwaysOnTop、skipTaskbar | 几何用 physical 设置 |
-| `viewer` | 运行时创建，单例，alwaysOnTop、skipTaskbar、可缩放 | 全文 / 原图；文本 760×620、图片按原始像素钳到 1280×960；自动停在面板右侧（放不下换左侧），面板不收 |
+| `viewer` | 运行时创建，单例、transparent（同款圆角卡片）、alwaysOnTop、skipTaskbar、可缩放 | 内容卡片：meta 条 + 点阵画布 + 缩放控件；文本 760×620、图片按原始像素钳到 1280×960；自动停在面板右侧（放不下换左侧），面板不收 |
 
 ## 关键设计决策（改动前先看这里）
 
-1. **右键菜单全部用原生菜单**，不用 HTML 菜单：悬浮球窗口只有 56×56、贴图窗口也很小，
+1. **右键菜单全部用原生菜单**，不用 HTML 菜单：悬浮入口只有 16×64、贴图窗口也很小，
    HTML 菜单会被窗口边界裁掉。菜单项 id 用 `<作用域>:<动作>` 前缀，`menu.rs` 统一分发。
 2. **overlay 不依赖窗口透明**：它是不透明窗口，铺满冻结图，暗化靠选区四周 4 块遮罩，
    选区内部露出未变暗的原图。这样视觉等于冻结画面，又少一个失败面。
@@ -104,40 +108,87 @@ cd src-tauri && cargo check   # Rust 类型检查
    面板标题那个子 `<span>` 就拖不动（这正是「面板拖不了」的原因）；`="deep"` 让子树任意处都能拖，
    而按钮属于 clickable，Tauri 会自动挡掉拖拽，不影响点击。
    面板 / 查看窗口的位置由前端 `onMoved` 节流回写 settings.json。
-11. **面板行是「单击看详情，右侧两个图标：复制 / 删除」**：行用 `div role="button"`（里面还有按钮，
-    嵌套 `<button>` 是非法结构），两个按钮都 `stopPropagation`，避免冒泡成「看详情」；
-    第二行显示相对时间（刚刚 / N 分钟前 / 今天 HH:MM / 昨天 …），由面板每分钟刷新一次 `now`。
+11. **面板行是「单击行为可切换 + 右侧三个图标：复制 / 贴图 / 删除」**：行用 `div role="button"`（里面还有按钮，
+    嵌套 `<button>` 是非法结构），按钮都 `stopPropagation`，避免冒泡成「看详情」；
+    第二行 meta 是稿子的两行结构：`n chars / 尺寸 · 大小` 一行、等宽字体时间一行，
+    由面板每分钟刷新一次 `now`。单击默认看详情，筛选行右边那颗闪电打开后变成「单击即复制」
+    （`AppSettings::click_to_copy`，真实持久化）。图钉是 toggle：已贴上时按钮常亮，再点取消
+    （面板 refresh 时顺带 `list_pins` 拿已贴条目）。
     删除是破坏性的（文件 + 库记录一起没），所以**点两次**：第一次只把按钮变成红色「确认删除」，
     3 秒不点自动撤销（`PanelApp` 的 `pendingDelete`）；删除期间条目行还在，方便反悔。
     查看窗口是**单例**（label `viewer`）并停在面板旁边：连点几条只在同一个窗口里换内容，
     不然每点一条就多一个 webview。键盘：Enter = 详情，Ctrl+Enter = 复制。
-12. **查看窗口的拖动**：标题栏 `="deep"` 整片可拖；正文留白、图片、页脚也能拖
+12. **查看窗口的拖动**：标题栏 `="deep"` 整片可拖；内容区留白、图片、页脚也能拖
     （所以图片可以像贴图那样拖着走）；文本 `<pre>` 故意**不**挂 drag-region，
-    否则一拖就变成移动窗口、没法选中复制。图片双击 = 切换适应窗口 / 原始尺寸。
-13. **悬浮球的枢纽态是「撑窗」，不是「画大一点」**：HTML 只能画在窗口里，悬停时要露出的
-    四个环绕按钮必须靠窗口本身变大 —— `ballhub::set_expanded` 把 ball 窗口在
-    56×56 ↔ 240×240 之间切换。展开的触发条件是**鼠标在球上停满 0.3 秒**
-    （`BallApp` 的 `HOVER_OPEN_DELAY_MS`，中途移开 / 开始拖动就作废）：光标只是路过时
-    不该弹出一圈按钮，更不该顺带把那块 240×240 的桌面点击吃掉。0.3 秒这个值的来由：
-    停住不动本身已经是最强的意图信号，0.1s 是「感觉瞬时」的门槛、1s 是「流程被打断」的
-    门槛，悬停类交互普遍落在 150~400ms（Windows 自己的鼠标悬停时间默认约 400ms）；
-    短到 0.3s 还有个好处是**不需要进度提示**，长到 1~2s 就必须给反馈了。
-    另外枢纽态一开，球上的 `title` 要摘掉（`title={open ? undefined : ...}`）：
-    光标还停在球上，原生提示会比枢纽态晚一步冒出来，正好糊在那圈按钮上。两条硬约束：
-    ① **球心不能动**，撑 / 收都按「窗口中心 = 球心」重算左上角（`top_left_for_center` 有单测），
-    否则鼠标底下的球会当场跳走；② **收起尺寸不能用配置里的 56**，Windows 会按
-    `SM_CXMINTRACK` 把它撑到 136（已知问题 12），所以第一次展开时把实测尺寸记进
-    `BallHubState`，收起时照它还原。
-    **窗口尺寸的唯一真相在 Rust**，前端只按 `ball:hub` 事件同步 CSS —— 因为窗口一藏起来
-    前端就收不到 `mouseleave`：截图前藏窗口（`hide_own_windows`）、隐藏悬浮球、第二实例唤醒
-    这几条路径都得由 Rust 主动收回，否则下次露出来是个 240×240 的大方框。
-    前端那边收起时还要 `blur()` + 把 `scrollTop/scrollLeft` 归零：窗口一缩小，
-    画面外那个「刚刚被点过、还带着焦点」的环绕按钮会诱使浏览器滚动画布把它露出来，
-    球心就跟窗口中心对不上了（`overflow:hidden` 挡不住这种程序性滚动）。
-    另外卫星按钮点截图前前端会先 `await` 收回枢纽态：截图冻结帧是**在藏窗口之前**抓的
-    （`start_region_capture`），不收回就会把一圈按钮拍进冻结图。
-    展开期间那块 240×240 的透明方区会吃掉桌面点击（已知问题 12 的同一个毛病），
-    所以只做成「鼠标一离开就收回」的临时态，不做常驻。
+    否则一拖就变成移动窗口、没法选中复制。图片双击 = 切换适应窗口 / 原始尺寸，
+    右下角缩放控件用 `clip.width/height × zoom` 直接给图片定尺寸（不用 transform，
+    这样滚动条范围是对的），「适应」与「100%」两个按钮分别回到 fit 与 1:1。
+13. **入口是三态悬浮球**（稿子「桌面悬浮球三态规范」）：HTML 只能画在窗口里，所以三种形态
+    靠窗口本身切换 —— `ballhub` 把 ball 窗口在 **16×64 胶囊 ↔ 52×52 常规球 ↔ 200×200 轮盘**
+    之间调整（稿子展开态写的是 240×240，实机看着太大，收到 200；改 `WHEEL_LOGICAL` 一个常量即可）。
+    五条硬约束：
+    ① **形状中心不能动**，撑开 / 收起 / 胶囊↔球切换 / 吸附一律按「窗口中心 = 形状中心」重算左上角
+    （`top_left_for_center` 有单测），否则鼠标底下那个东西会当场跳走；
+    ② **收起尺寸不能用配置里的值**，Windows 会把无边框窗口按 `SM_CXMINTRACK` 撑到 136 宽
+    （已知问题 12），所以撑开那一刻把**实测矩形**记进 `BallHubState`，收起时照它还原；
+    ③ **轮盘要钳进显示器**：胶囊贴边时按中心撑出来的 200×200 会有一半在屏幕外，
+    那一侧的卫星按钮就点不到了（`clamp_into`，有单测）；
+    ④ **展开态下不切形态**（`set_docked` 直接返回），免得把轮盘改成小球；
+    ⑤ **窗口尺寸的唯一真相在 Rust**，前端只按 `ball:state` 事件（payload `tab`/`orb`/`wheel`）
+    切 CSS —— 因为窗口一藏起来前端就收不到 mouseleave：截图前藏窗口（`hide_own_windows`）、
+    隐藏悬浮球、第二实例唤醒这几条路径都得由 Rust 主动收回，否则下次露出来是个 200×200 的大方框。
+    **吸附**（`ballhub::dock`）在启动时、每次拖动结束（`save_ball_position`）时跑，判定只看
+    形状中心离屏幕左右边缘是否进了 40 逻辑像素：进了 → 吸附成胶囊（窗口横向推出屏幕
+    `(窗口宽 − 16)/2`，顺带把吃点击的透明区推到屏幕外；纵向钳制，胶囊整条可见）；
+    没进 → 常规球，并把窗口钳回可视区（**从贴边拖回桌面时必须推回来**，否则球有一半在屏幕外）。
+    吸附 / 形态切换都是幂等的（`set_docked` 只在尺寸或位置真的变了才动窗口），
+    所以它自己触发的 `onMoved` 再叫一次 `save_ball_position` 也不会抖。
+    展开条件是**鼠标在胶囊 / 球上停满 0.3 秒**（`HOVER_OPEN_DELAY_MS`，中途移开 / 开始拖动就作废）：
+    光标只是路过时不该弹出一圈按钮，更不该顺带把那块桌面点击吃掉。0.3 秒这个值的来由：
+    停住不动本身已经是最强的意图信号，0.1s 是「感觉瞬时」的门槛、1s 是「流程被打断」的门槛，
+    悬停类交互普遍落在 150~400ms（Windows 自己的鼠标悬停时间默认约 400ms）；
+    短到 0.3s 还有个好处是**不需要进度提示**。另外展开后 `title` 要摘掉
+    （`title={open ? undefined : ...}`）：光标还停在上头，原生提示会比轮盘晚一步冒出来。
+    收起时前端还要 `blur()` + 把 `scrollTop/scrollLeft` 归零：窗口一缩小，画面外那个
+    「刚刚被点过、还带着焦点」的卫星按钮会诱使浏览器滚动画布把它露出来，形状中心就跟窗口
+    中心对不上了（`overflow:hidden` 挡不住这种程序性滚动）。
+    另外卫星按钮点截图前前端会先 `await` 收回轮盘：截图冻结帧是**在藏窗口之前**抓的
+    （`start_region_capture`），不收回就会把轮盘拍进冻结图。
+    点击语义：**常规球单击 = 开合面板**（应用一直以来的手感，稿子写的 click 展开轮盘由 hover 兜住），
+    **贴边胶囊单击 = 唤出常规态**（稿子 State 01 的原话；胶囊上停满 0.3 秒会先展开轮盘，
+    所以想唤出常规态得快点点，慢慢悬停就是展开 —— 这是稿子的 hover / click 双语义）。
+    两条点击路径都走 `runSatellite` 那一套（先收回轮盘再执行动作）：点完光标还停在形状上，
+    那个「悬停满 0.3 秒展开」的倒计时不掐掉的话，面板刚露出来轮盘就自己弹回来 ——
+    面板是后来的置顶窗，轮盘只会从它的边缘探出来，而且面板是半透明玻璃、撑开的轮盘会直接透出来。
+    Rust 侧 `show_panel` / `toggle_panel` 打开面板前也会 `ballhub::set_expanded(false)` 兜底。
+14. **样式统一在 `styles/index.css` 的 Glacier 设计系统里**（严格照 stitch 稿）：
+    token 与稿子的 Tailwind 名字一一对应，带 `/xx` 透明度的存成 `R G B` 三元组，
+    写法和稿子一样：`rgb(var(--surface) / 85%)` == `bg-surface/85`。
+    底色 `background #0a0e1a` → `surface #0f1524`（卡片 `surface/85`）→ `surface-container #141c2e`；
+    主色 `primary #7dd3fc`、`primary-container #0e4d6e`（选中态底色）、`tertiary #c8a0f0`（贴图）、
+    `error #ff6b6b`。三条规矩：
+    ① **窗口 = 一张圆角玻璃卡片**（`rounded-2xl bg-surface/85 backdrop-blur-2xl border-outline-variant/30`）；
+    ② **每扇窗的 main 里都有两张发光斑**（右上 `primary/10`、左下 `tertiary/10`、`blur-3xl`）——
+    这是稿子里最明显的氛围光，别省；发光斑是绝对定位的，`app-main` 里其它子元素统一抬一层；
+    ③ 字号只有四档：12（正文/品牌）· 11（筛选/按钮/路径）· 10（meta）· 9（角标），
+    数字与时间一律等宽字体，**滚动条按稿子全隐藏**（`::-webkit-scrollbar { width: 0 }`，滚轮照常）。
+    导航：面板 / 查看窗口都是 48px 居中品牌头（左占位 + `PPCLIP` + 右上按钮），
+    内容页是 `48px 头 → 内容卡片 → 24px 页脚（Esc 关闭）`；设置是面板窗口的**第二屏**
+    （标题栏换成「← + 剪贴板设置」），不是弹层。
+    图标全部走 `components/icons.tsx`（24 网格、`stroke-width:1.7`、`currentColor`）——
+    别往界面上写「截 / 全 / ⚙ / ✕」这类中文字形当图标，也别引图标字体（离线环境）。
+    **窗口透明只给 ball / pin / main / viewer**：前两者本来就透明，后两者要的是圆角卡片，
+    透明区只有四个圆角（`tauri.conf.json` 的 main 与 `viewer.rs` 的 viewer 都是
+    `transparent:true` + `shadow:false`；Windows 的方形投影会把圆角画成直角）。
+    注意**桌面是拍不到模糊的**：WebView2 的 `backdrop-filter` 只模糊页面内的下层，
+    所以「玻璃」的透视感来自半透明，模糊只用在玻璃叠玻璃的地方（输入框、内容卡片）。
+    想真的把桌面糊掉得引 `window-vibrancy`（tauri 已经间接依赖了它），v1 不做。
+15. **设置项以「后端真的有没有」为准**：稿子里的滑杆 / 分段 / 开关全部照做，但只接真实设置 ——
+    `历史条目上限`（滑杆，`max_items`）、`存储上限`（进度条用真实 `image_bytes` + 分段快档，
+    `max_image_mb`）、`数据目录管理`（`open_data_dir`）、`悬浮球管理`（开关 = `ball_visible` /
+    `show_ball` / `hide_ball`，不透明度 = `ball_opacity`，经 `settings:changed` 实时生效）、
+    `开机自启`（`autostart.rs`，注册表为唯一真相）。
+    「清空全部历史」按稿子放在面板状态条上，「退出」在标签右键菜单里 —— 设置页里不重复放。
 
 ## 已知问题
 
@@ -152,7 +203,9 @@ cd src-tauri && cargo check   # Rust 类型检查
    说明是 cc-rs 调用路径下的 MSVC 行为，与沙箱/命令长度/管道无关。
 2. 全屏独占应用（游戏、部分播放器）会盖住悬浮球与贴图，v1 不做定时重新置顶。
 3. 混合 DPI 多显示器：只支持在光标所在屏幕内完成选区，跨屏选区未实现。
-4. 悬浮球与贴图依赖窗口透明；若渲染成黑底方块，回退方案改成不透明圆角窗口。
+4. 悬浮球 / 贴图 / 面板 / 查看窗口都依赖窗口透明（面板与查看窗口要的是圆角卡片）；
+   若某台机器上渲染成黑底方块（`transparent` 失效），回退方案是把 `--glass-*` 换成实底、
+   去掉 `border-radius`，其它样式不用动。
 5. 重新编译前 `ppclip.exe` 必须退出（os error 5）。
 6. **调试「启动就 panic」的正确姿势**：Tauri 在 `setup` 阶段会**先**按 `tauri.conf.json`
    创建窗口（`WebviewWindowBuilder::from_config(...)?.build()?`），**之后**才调用我们注册的
@@ -195,11 +248,19 @@ cd src-tauri && cargo check   # Rust 类型检查
 11. `hide_own_windows` 之后的任何失败路径都必须把窗口恢复回来：建 overlay 失败会回滚
     （`cancel_capture_impl`），另有 10s 看门狗兜底（overlay 没显示出来就取消并恢复）。
     改截图流程时别破坏这两条兜底 —— 没有托盘，窗口一藏就等于应用消失了。
-12. 悬浮球窗口在 Windows 上**不是 56×56**：带 `WS_DLGFRAME` 的窗口宽度受 `SM_CXMINTRACK`
-    （本机 136）钳制，实际是 136×56，两侧各约 40px 透明区域。`place-items:center` 让球的位置看着正常，
-    但那块区域照样吃掉点击、而且窗口置顶。彻底解决要按光标位置切 `set_ignore_cursor_events`，v1 先记着。
-    悬停枢纽态（设计决策 13）继承了这条：撑到 240×240 期间那块透明方区同样吃点击，
-    所以展开态只在「鼠标在里面」时存在；`ballhub` 也正因为这条才要记**实测**收起尺寸。
+12. 悬浮球窗口在 Windows 上**不是 16×64 / 52×52**：带 `WS_DLGFRAME` 的窗口宽度受 `SM_CXMINTRACK`
+    （本机 136）钳制，实测是 **136×64（胶囊）** 或 **136×52（常规球）**，形状两侧各约 60px 透明区。
+    形状靠居中显示看着正常，但那块区域照样吃掉点击、而且窗口置顶 —— 现在**吸附**（设计决策 13）
+    把窗口故意推出屏幕 `(窗口宽 − 16)/2`，那块透明区大半落到屏幕外，问题基本被绕掉了。
+    彻底解决仍要按光标位置切 `set_ignore_cursor_events`，v1 先记着。
+    撑到 200×200 期间（鼠标在形状上时）透明方区同样吃点击，所以展开态只在鼠标悬停期间存在，
+    `ballhub` 也正因为这条才要记**实测**收起尺寸。
+13. **受限令牌 / 沙箱下写 `HKCU\...\Run` 会被拒**（`拒绝访问。 (os error 5)`）：开机自启在
+    正常桌面会话里没问题（已实测：把 exe 放到 `%TEMP%` 启动，开关 → 注册表出现该值、
+    日志 `已开启开机自启`、再点一次能删掉）。但**从某些受限环境（写受限令牌 / 沙箱）启动
+    工作目录里的 exe** 时，进程没有该键的写权限，注册表读得到、写不进去 ——
+    界面会如实报错并回滚开关，日志里是 `切换开机自启失败`。别把它当代码 bug 查。
+    自查姿势：`Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name PPClip`。
 
 ## 发布
 

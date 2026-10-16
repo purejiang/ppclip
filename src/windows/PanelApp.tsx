@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { api, dataDir } from "../api";
 import ClipRow from "../components/ClipRow";
-import SettingsSheet from "../components/SettingsSheet";
+import SettingsPage from "../components/SettingsPage";
+import {
+  IconArrowBack,
+  IconBolt,
+  IconBroom,
+  IconClipboardArrow,
+  IconGear,
+  IconMonitor,
+  IconScan,
+  IconSearch,
+} from "../components/icons";
 import type { Clip, ClipStats, KindFilter } from "../types";
 
+/** 筛选：稿子里是 All / Text / Images / Files，我们只有文本与图片两类 */
 const FILTERS: { key: KindFilter; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "text", label: "文本" },
@@ -19,7 +29,13 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-/** 历史面板：搜索、筛选、键盘导航、点击即复制 */
+/**
+ * 历史面板（照 stitch 稿）：
+ *
+ * 48px 居中品牌头（左占位 + PPCLIP + 右上设置）→ 搜索 + 胶囊筛选（带闪电开关）
+ * → 扁平玻璃列表 → 状态条（脉冲点 + n / 上限 + 截图 / 清空）→ 24px 页脚（Esc 关闭）。
+ * 设置是同一扇窗里的第二屏（标题栏换成「← + 剪贴板设置」），所以 Esc 是返回而不是关窗。
+ */
 export default function PanelApp() {
   const [clips, setClips] = useState<Clip[]>([]);
   const [stats, setStats] = useState<ClipStats | null>(null);
@@ -34,6 +50,13 @@ export default function PanelApp() {
   const [now, setNow] = useState(() => Date.now());
   /** 正在等第二次点击确认删除的条目 id */
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
+  /** 已经贴在桌面上的条目 id（图钉按钮据此点亮 / 变成取消贴图） */
+  const [pinnedIds, setPinnedIds] = useState<number[]>([]);
+  /** 单击直接复制（稿子里筛选行右边那颗闪电）：真实存在设置里 */
+  const [clickToCopy, setClickToCopy] = useState(false);
+  /** 历史条目上限，状态条显示 `n / 上限` */
+  const [maxItems, setMaxItems] = useState(300);
+  const [clearing, setClearing] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -58,14 +81,33 @@ export default function PanelApp() {
     void api.deleteClip(clip.id);
   };
 
+  /** 贴到桌面 / 取消贴图（稿子行里的图钉是 toggle 语义） */
+  const handlePin = async (clip: Clip) => {
+    try {
+      setError(null);
+      const pins = await api.listPins();
+      const existing = pins.find((pin) => pin.clipId === clip.id);
+      if (existing) await api.deletePin(existing.id);
+      else await api.createPin(clip.id);
+      setPinnedIds((await api.listPins()).map((pin) => pin.clipId));
+    } catch (err) {
+      setError(`贴图操作失败：${String(err)}`);
+    }
+  };
+
   const refresh = useCallback(async () => {
     try {
-      const [list, nextStats] = await Promise.all([
+      const [list, nextStats, settings, pins] = await Promise.all([
         api.listClips(debounced, kind),
         api.clipStats(),
+        api.getSettings(),
+        api.listPins().catch(() => []),
       ]);
       setClips(list);
       setStats(nextStats);
+      setClickToCopy(settings.clickToCopy);
+      setMaxItems(settings.maxItems);
+      setPinnedIds(pins.map((pin) => pin.clipId));
       setActive((index) => Math.min(index, Math.max(0, list.length - 1)));
       setError(null);
     } catch (err) {
@@ -91,8 +133,8 @@ export default function PanelApp() {
 
   // 后端有新条目 / 贴图变化 → 刷新
   useEffect(() => {
-    const clipsChanged = listen("clips:changed", () => void refresh());
-    const pinsChanged = listen("pins:changed", () => void refresh());
+    const clipsChanged = api.onClipsChanged(() => void refresh());
+    const pinsChanged = api.onPinsChanged(() => void refresh());
     return () => {
       void clipsChanged.then((fn) => fn());
       void pinsChanged.then((fn) => fn());
@@ -112,7 +154,7 @@ export default function PanelApp() {
     };
   }, [refresh]);
 
-  // 拖动后回写位置（和悬浮球同款节流），下次唤起还记得停在哪
+  // 拖动后回写位置（节流），下次唤起还记得停在哪
   useEffect(() => {
     const win = getCurrentWindow();
     let timer: number | undefined;
@@ -138,6 +180,7 @@ export default function PanelApp() {
         else void api.hidePanel();
         return;
       }
+      if (settingsOpen) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setActive((i) => Math.min(i + 1, clips.length - 1));
@@ -162,7 +205,26 @@ export default function PanelApp() {
     document
       .querySelector(".clip-row.is-active")
       ?.scrollIntoView({ block: "nearest" });
-  }, [active, clips]);
+  }, [active, clips, settingsOpen]);
+
+  /** 单击一条：默认看详情，开了闪电就直接复制 */
+  const handleRowClick = (clip: Clip) => {
+    if (clickToCopy) void api.copyClip(clip.id);
+    else void api.openViewer(clip.id);
+  };
+
+  /** 闪电开关：写进设置，面板与重开都记得 */
+  const toggleClickToCopy = async () => {
+    const next = !clickToCopy;
+    setClickToCopy(next);
+    try {
+      const settings = await api.getSettings();
+      await api.updateSettings({ ...settings, clickToCopy: next });
+    } catch (err) {
+      setClickToCopy(!next);
+      setError(`保存设置失败：${String(err)}`);
+    }
+  };
 
   // 截图按钮：失败时窗口多半已经被藏起来了，把面板叫回来并把原因摆出来，
   // 否则用户看到的就是「点一下应用没了」。
@@ -176,113 +238,197 @@ export default function PanelApp() {
     }
   };
 
+  const clearAll = async () => {
+    setClearing(true);
+    try {
+      await api.clearClips("all");
+      await refresh();
+    } catch (err) {
+      setError(`清空失败：${String(err)}`);
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
-    <div className="panel">
-      {/* deep：标题文字上也能拖；按钮是 clickable，会自己挡掉拖拽。
-          双击不去最大化（面板是固定尺寸的，且双击容易被当成拖拽） */}
+    <div className="app-card">
       <header
-        className="panel-header"
+        className="app-header"
         data-tauri-drag-region="deep"
         onDoubleClick={(e) => e.stopPropagation()}
       >
-        <span className="panel-title">PPClip</span>
-        <div className="panel-actions">
-          <button
-            type="button"
-            className="icon-button"
-            title="区域截图"
-            onClick={() => void runCapture(api.startRegionCapture)}
-          >
-            截
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            title="全屏截图"
-            onClick={() => void runCapture(api.captureFullscreen)}
-          >
-            全
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            title="设置"
-            onClick={() => setSettingsOpen((open) => !open)}
-          >
-            ⚙
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            title="隐藏（Esc）"
-            onClick={() => void api.hidePanel()}
-          >
-            ✕
-          </button>
+        <div className="app-header-side">
+          {settingsOpen && (
+            <button
+              type="button"
+              className="app-header-button"
+              title="返回历史"
+              aria-label="返回历史"
+              onClick={() => setSettingsOpen(false)}
+            >
+              <IconArrowBack size={16} />
+            </button>
+          )}
+        </div>
+
+        <div className="app-brand">
+          {settingsOpen ? <IconGear size={16} /> : <IconClipboardArrow size={16} />}
+          {settingsOpen ? "剪贴板设置" : "PPCLIP"}
+        </div>
+
+        <div className="app-header-side">
+          {!settingsOpen && (
+            <button
+              type="button"
+              className="app-header-button app-header-button--primary"
+              title="设置"
+              aria-label="设置"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <IconGear size={16} />
+            </button>
+          )}
         </div>
       </header>
 
-      <div className="panel-search">
-        <input
-          ref={searchRef}
-          className="search-input"
-          placeholder="搜索剪贴板历史…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <div className="filters">
-          {FILTERS.map((filter) => (
-            <button
-              key={filter.key}
-              type="button"
-              className={`filter${kind === filter.key ? " is-active" : ""}`}
-              onClick={() => setKind(filter.key)}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <main className="app-main">
+        <span className="app-glow app-glow--primary" aria-hidden="true" />
+        <span className="app-glow app-glow--tertiary" aria-hidden="true" />
 
-      <div className="clip-list">
-        {clips.length === 0 ? (
-          <p className="placeholder">
-            {debounced ? "没有匹配的记录" : "还没有记录：复制一段文字或一张图试试"}
-          </p>
+        {settingsOpen ? (
+          <SettingsPage
+            onChanged={() => {
+              void refresh();
+            }}
+          />
         ) : (
-          clips.map((clip, index) => (
-            <ClipRow
-              key={clip.id}
-              clip={clip}
-              dataDir={dir}
-              active={index === active}
-              now={now}
-              confirming={pendingDelete === clip.id}
-              onClick={(item) => void api.openViewer(item.id)}
-              onCopy={(item) => void api.copyClip(item.id)}
-              onDelete={handleDelete}
-              onContextMenu={(item) => void api.showClipMenu(item.id)}
-            />
-          ))
-        )}
-      </div>
+          <>
+            <div className="panel-search">
+              <label className="search-wrap">
+                <IconSearch size={16} />
+                <input
+                  ref={searchRef}
+                  className="search-input"
+                  placeholder="搜索剪贴板历史…"
+                  aria-label="搜索剪贴板历史"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </label>
+              <div className="panel-filters">
+                <div className="filter-pills">
+                  {FILTERS.map((filter) => (
+                    <button
+                      key={filter.key}
+                      type="button"
+                      className={`filter${kind === filter.key ? " is-active" : ""}`}
+                      onClick={() => setKind(filter.key)}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className={`bolt-button${clickToCopy ? " is-on" : ""}`}
+                  title={
+                    clickToCopy
+                      ? "单击即复制：已开启（点一下改回「单击看详情」）"
+                      : "单击看详情：点一下改成「单击即复制」"
+                  }
+                  aria-label="单击即复制"
+                  aria-pressed={clickToCopy}
+                  onClick={() => void toggleClickToCopy()}
+                >
+                  <IconBolt size={14} />
+                </button>
+              </div>
+            </div>
 
-      <footer className="panel-footer">
-        <span>
-          {stats
-            ? `${stats.total} 条 · 文本 ${stats.textCount} · 图片 ${stats.imageCount}`
-            : ""}
-        </span>
-        <span>{stats ? `图片 ${formatBytes(stats.imageBytes)}` : ""}</span>
-      </footer>
+            <div className="clip-list">
+              {clips.length === 0 ? (
+                <p className="placeholder">
+                  {debounced ? "没有匹配的记录" : "还没有记录：复制一段文字或一张图试试"}
+                </p>
+              ) : (
+                clips.map((clip, index) => (
+                  <ClipRow
+                    key={clip.id}
+                    clip={clip}
+                    dataDir={dir}
+                    active={index === active}
+                    now={now}
+                    confirming={pendingDelete === clip.id}
+                    pinned={pinnedIds.includes(clip.id)}
+                    clickToCopy={clickToCopy}
+                    onClick={handleRowClick}
+                    onCopy={(item) => void api.copyClip(item.id)}
+                    onPin={(item) => void handlePin(item)}
+                    onDelete={handleDelete}
+                    onContextMenu={(item) => void api.showClipMenu(item.id)}
+                  />
+                ))
+              )}
+            </div>
+
+            <div className="panel-status">
+              <div className="panel-status-group">
+                <span className="panel-status-dot" aria-hidden="true" />
+                <span className="panel-status-count">{stats?.total ?? 0}</span>
+                <span>/ {maxItems} 条上限</span>
+              </div>
+              <div className="panel-status-tools">
+                <button
+                  type="button"
+                  className="status-button"
+                  title="区域截图"
+                  aria-label="区域截图"
+                  onClick={() => void runCapture(api.startRegionCapture)}
+                >
+                  <IconScan size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="status-button"
+                  title="全屏截图"
+                  aria-label="全屏截图"
+                  onClick={() => void runCapture(api.captureFullscreen)}
+                >
+                  <IconMonitor size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="status-button status-button--danger"
+                  title="清空全部历史"
+                  aria-label="清空全部历史"
+                  disabled={clearing}
+                  onClick={() => void clearAll()}
+                >
+                  <IconBroom size={14} />
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </main>
 
       {error && <div className="panel-error">{error}</div>}
-      {settingsOpen && (
-        <SettingsSheet
-          onClose={() => setSettingsOpen(false)}
-          onChanged={() => void refresh()}
-        />
-      )}
+
+      <footer className="app-footer">
+        <div className="app-footer-group">
+          <span>PPClip v0.1</span>
+          <span className="app-footer-dot" aria-hidden="true" />
+          <span>
+            {stats
+              ? `${stats.textCount} 文本 · ${stats.imageCount} 图片 · ${formatBytes(stats.imageBytes)}`
+              : "Ready"}
+          </span>
+        </div>
+        <div className="app-footer-group">
+          <span className="kbd">Esc</span>
+          <span>{settingsOpen ? "返回" : "关闭"}</span>
+        </div>
+      </footer>
     </div>
   );
 }

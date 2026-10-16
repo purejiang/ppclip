@@ -1,3 +1,4 @@
+pub mod autostart;
 pub mod ballhub;
 pub mod capture;
 pub mod clipboard;
@@ -15,10 +16,23 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use models::AppSettings;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 pub use capture::CaptureState;
 pub use clipboard::{SelfWrite, WatcherHandle};
+
+/// 面板显示 / 隐藏时广播给悬浮球（payload 是 bool）：
+/// 标签上的「新条目」角标靠它决定是计数还是归零
+pub const PANEL_VISIBLE_EVENT: &str = "panel:visible";
+
+/// 面板可见性变化后通知悬浮球
+fn notify_panel_visibility(app: &tauri::AppHandle) {
+    let visible = app
+        .get_webview_window("main")
+        .and_then(|win| win.is_visible().ok())
+        .unwrap_or(false);
+    let _ = app.emit_to("ball", PANEL_VISIBLE_EVENT, visible);
+}
 
 /// 应用数据目录（Windows：`%APPDATA%\com.ppclip.app`）
 pub struct DataDir(pub PathBuf);
@@ -28,10 +42,17 @@ pub struct SettingsState(pub Mutex<AppSettings>);
 
 /// 显示历史面板并聚焦（悬浮球菜单 / 第二实例唤醒都用它）
 pub fn show_panel(app: &tauri::AppHandle) {
+    // 面板一露面就收回枢纽态：面板是后来的置顶窗，枢纽态要是还撑着，
+    // 那圈按钮只会从面板边缘探出来，而且面板是半透明玻璃、撑开的球会透出来。
+    // 前端在点击路径上也会先收回（`BallApp::runSatellite`），这里是兜底。
+    if let Err(err) = ballhub::set_expanded(app, false) {
+        log::warn!("显示面板前收回枢纽态失败: {err}");
+    }
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_focus();
     }
+    notify_panel_visibility(app);
 }
 
 /// 隐藏历史面板
@@ -39,6 +60,7 @@ pub fn hide_panel(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.hide();
     }
+    notify_panel_visibility(app);
 }
 
 /// 面板显示 / 隐藏切换
@@ -47,10 +69,15 @@ pub fn toggle_panel(app: &tauri::AppHandle) {
         if win.is_visible().unwrap_or(false) {
             let _ = win.hide();
         } else {
+            // 和 show_panel 一样：面板露面就先收回枢纽态
+            if let Err(err) = ballhub::set_expanded(app, false) {
+                log::warn!("显示面板前收回枢纽态失败: {err}");
+            }
             let _ = win.show();
             let _ = win.set_focus();
         }
     }
+    notify_panel_visibility(app);
 }
 
 /// 把「会创建 / 销毁窗口」的活儿挪到独立线程执行，并等它跑完。
@@ -220,10 +247,14 @@ pub fn run() {
             app.manage(ballhub::BallHubState::default());
             app.manage(DataDir(data_dir));
 
-            // 恢复悬浮球上次位置
+            // 恢复悬浮球上次位置：先摆好，再吸附到最近的屏幕边缘（稿子里的 Edge Dock Tab）。
+            // 吸附同时保证标签整条落在屏幕内 —— 没有托盘，标签跑到屏幕外就等于应用没了
             if let Some(ball) = app.get_webview_window("ball") {
                 if let (Some(x), Some(y)) = (settings.ball_x, settings.ball_y) {
                     let _ = ball.set_position(tauri::PhysicalPosition::new(x, y));
+                }
+                if let Err(err) = ballhub::dock(app.handle()) {
+                    log::warn!("启动时吸附悬浮球失败: {err}");
                 }
             }
             if let Some(panel) = app.get_webview_window("main") {
@@ -309,7 +340,12 @@ pub fn run() {
             commands::hide_panel,
             commands::hide_ball,
             commands::show_ball,
+            commands::ball_visible,
+            commands::ball_state,
+            commands::is_autostart_enabled,
+            commands::set_autostart,
             commands::set_ball_expanded,
+            commands::set_ball_docked,
             commands::save_ball_position,
             commands::save_panel_position,
             commands::show_ball_menu,

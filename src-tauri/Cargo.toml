@@ -34,6 +34,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 log = "0.4"
+# 开机自启：写 HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+# （tauri 自己就依赖 winreg，加进来不会多下载东西）
+winreg = "0.56"
 
 [features]
 default = ["custom-protocol"]

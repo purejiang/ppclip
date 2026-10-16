@@ -14,8 +14,8 @@
       {
         "label": "ball",
         "title": "PPClip",
-        "width": 56,
-        "height": 56,
+        "width": 16,
+        "height": 64,
         "resizable": false,
         "decorations": false,
         "transparent": true,
@@ -28,12 +28,13 @@
         "label": "main",
         "title": "PPClip",
         "width": 420,
-        "height": 560,
+        "height": 600,
         "resizable": false,
         "decorations": false,
-        "transparent": false,
+        "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
+        "shadow": false,
         "center": true,
         "visible": false
       }

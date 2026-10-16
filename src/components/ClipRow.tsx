@@ -1,6 +1,7 @@
 import { memo } from "react";
 
 import { assetUrl } from "../api";
+import { IconCopy, IconImage, IconPin, IconText, IconTrash } from "./icons";
 import type { Clip } from "../types";
 
 interface Props {
@@ -11,8 +12,13 @@ interface Props {
   now: number;
   /** 这条正在等第二次点击确认删除 */
   confirming: boolean;
+  /** 这条已经贴在桌面上了（图钉按钮点亮，再点=取消贴图） */
+  pinned: boolean;
+  /** 面板的「单击即复制」开关：只影响提示文案（行为在 `PanelApp` 里） */
+  clickToCopy: boolean;
   onClick: (clip: Clip) => void;
   onCopy: (clip: Clip) => void;
+  onPin: (clip: Clip) => void;
   onDelete: (clip: Clip) => void;
   onContextMenu: (clip: Clip) => void;
 }
@@ -56,7 +62,10 @@ function formatFull(raw: string): string {
 }
 
 /**
- * 一条历史：单击看完整内容，右侧两个图标按钮负责复制 / 删除，第二行显示时间。
+ * 一条历史（照 stitch 稿的行结构）：
+ *
+ * `40×40 类型图标块` + 内容列（文本类是「预览 + 两行 meta」，图片类是「160×96 缩略图 + 两行 meta」）
+ * + 右侧三个动作（复制 / 贴图 / 删除）。
  *
  * 用 `div role="button"` 而不是 `<button>`：里面还要放按钮，嵌套 button 是非法结构，
  * 点击也会互相干扰。键盘走面板那套方向键 + Enter（见 `PanelApp`）。
@@ -68,8 +77,11 @@ function ClipRow({
   active,
   now,
   confirming,
+  pinned,
+  clickToCopy,
   onClick,
   onCopy,
+  onPin,
   onDelete,
   onContextMenu,
 }: Props) {
@@ -77,45 +89,61 @@ function ClipRow({
     clip.kind === "image" && clip.thumbRel
       ? assetUrl(dataDir, clip.thumbRel)
       : null;
+  const isImage = clip.kind === "image";
+  const size = formatBytes(clip.bytes);
+  const when = formatWhen(clip.lastUsedAt, now);
 
   return (
     <div
       role="button"
       tabIndex={0}
       className={`clip-row${active ? " is-active" : ""}`}
-      title={`单击查看完整内容 · 右侧按钮复制 / 删除 · 右键更多\n创建：${formatFull(clip.createdAt)}\n最后使用：${formatFull(clip.lastUsedAt)}`}
+      title={`单击${clickToCopy ? "复制" : "查看完整内容"} · 右侧按钮复制 / 贴图 / 删除 · 右键更多\n创建：${formatFull(clip.createdAt)}\n最后使用：${formatFull(clip.lastUsedAt)}`}
       onClick={() => onClick(clip)}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu(clip);
       }}
     >
-      <span className={`clip-kind clip-kind--${clip.kind}`}>
-        {clip.kind === "image" ? "图" : "文"}
-      </span>
+      <div className="clip-row-body">
+        <div
+          className={`clip-kind${isImage ? " clip-kind--image" : ""}`}
+          title={isImage ? "图片" : "文本"}
+        >
+          {isImage ? <IconImage size={20} /> : <IconText size={18} />}
+        </div>
 
-      <span className="clip-main">
-        {thumb ? (
-          <span className="clip-thumb">
-            <img src={thumb} alt="" draggable={false} />
-            <span className="clip-thumb-meta">
-              {clip.width}×{clip.height} · {formatBytes(clip.bytes)}
-            </span>
-          </span>
-        ) : (
-          <span className="clip-text">{clip.preview}</span>
-        )}
-
-        <span className="clip-meta">
-          {clip.source === "screenshot" && (
-            <span className="clip-badge">截图</span>
+        <div className="clip-main">
+          {thumb ? (
+            <div className="clip-thumb">
+              <img src={thumb} alt="" draggable={false} />
+              {clip.source === "screenshot" && (
+                <span className="clip-badge clip-badge--corner">截图</span>
+              )}
+            </div>
+          ) : (
+            <div className="clip-title-row">
+              <span className="clip-text">{clip.preview}</span>
+              {clip.source === "screenshot" && (
+                <span className="clip-badge">截图</span>
+              )}
+            </div>
           )}
-          {formatWhen(clip.lastUsedAt, now)}
-          {clip.useCount > 1 && ` · 用过 ${clip.useCount} 次`}
-        </span>
-      </span>
 
-      <span className="clip-actions">
+          <div className="clip-meta">
+            <div className="clip-meta-line">
+              {/* 文本条目没有图片字节，别显示「0 B」；用真实字数（列表带全文） */}
+              {isImage
+                ? `${clip.width ?? "?"}×${clip.height ?? "?"} · ${size}`
+                : `${clip.text?.length ?? clip.preview.length} chars`}
+              {clip.useCount > 1 && ` · 用过 ${clip.useCount} 次`}
+            </div>
+            <div className="clip-meta-time">{when}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="clip-actions">
         <button
           type="button"
           className="clip-action"
@@ -126,7 +154,21 @@ function ClipRow({
             onCopy(clip);
           }}
         >
-          <span className="clip-copy-glyph" aria-hidden="true" />
+          <IconCopy size={14} />
+        </button>
+
+        <button
+          type="button"
+          className={`clip-action clip-action--pin${pinned ? " is-on" : ""}`}
+          title={pinned ? "取消贴图" : "贴到桌面"}
+          aria-label={pinned ? "取消贴图" : "贴到桌面"}
+          aria-pressed={pinned}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPin(clip);
+          }}
+        >
+          <IconPin size={14} />
         </button>
 
         <button
@@ -142,10 +184,10 @@ function ClipRow({
           {confirming ? (
             <span className="clip-del-confirm">确认删除</span>
           ) : (
-            <span className="clip-del-glyph" aria-hidden="true" />
+            <IconTrash size={14} />
           )}
         </button>
-      </span>
+      </div>
     </div>
   );
 }

@@ -22,12 +22,28 @@ export const api = {
   hidePanel: () => invoke<void>("hide_panel"),
   hideBall: () => invoke<void>("hide_ball"),
   showBall: () => invoke<void>("show_ball"),
-  /** 悬停枢纽态：Rust 按「球心不动」撑大 / 还原悬浮球窗口（见 src-tauri/src/ballhub.rs） */
+  /** 悬浮球当前是否可见（设置页的开关如实反映状态） */
+  ballVisible: () => invoke<boolean>("ball_visible"),
+  /** 开机自启：注册表是唯一真相，每次现场问 */
+  isAutostartEnabled: () => invoke<boolean>("is_autostart_enabled"),
+  setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
+  /** 设置变化（任何窗口改了设置都会广播，悬浮球据此实时改不透明度） */
+  onSettingsChanged: (handler: () => void) =>
+    listen("settings:changed", () => handler()),
+  /** 悬停枢纽态：Rust 按「形状中心不动」撑成 HUD 轮盘（见 src-tauri/src/ballhub.rs） */
   setBallExpanded: (expanded: boolean) =>
     invoke<void>("set_ball_expanded", { expanded }),
-  /** 订阅枢纽态变化：Rust 是窗口尺寸的唯一真相，前端只同步 CSS */
-  onBallHub: (handler: (expanded: boolean) => void) =>
-    listen<boolean>("ball:hub", (event) => handler(event.payload)),
+  /** 切「贴边胶囊 ↔ 常规球」（胶囊上点一下 = 唤出常规态） */
+  setBallDocked: (docked: boolean) =>
+    invoke<void>("set_ball_docked", { docked }),
+  /** 当前形态："tab"（贴边胶囊）/ "orb"（常规球）/ "wheel"（展开态） */
+  ballState: () => invoke<string>("ball_state"),
+  /** 订阅形态变化：Rust 是窗口尺寸的唯一真相，前端只同步 CSS */
+  onBallState: (handler: (state: string) => void) =>
+    listen<string>("ball:state", (event) => handler(event.payload)),
+  /** 订阅面板显示 / 隐藏（悬浮球标签上的「新条目」角标据此归零） */
+  onPanelVisible: (handler: (visible: boolean) => void) =>
+    listen<boolean>("panel:visible", (event) => handler(event.payload)),
   saveBallPosition: (x: number, y: number) =>
     invoke<void>("save_ball_position", { x, y }),
   savePanelPosition: (x: number, y: number) =>
@@ -50,6 +66,10 @@ export const api = {
   clearClips: (kind: KindFilter) =>
     invoke<number>("clear_clips", { kind: kind === "all" ? null : kind }),
   showClipMenu: (id: number) => invoke<void>("show_clip_menu", { id }),
+  /** 历史或贴图有变化（后端广播，前端据此刷新列表 / 计数） */
+  onClipsChanged: (handler: () => void) =>
+    listen("clips:changed", () => handler()),
+  onPinsChanged: (handler: () => void) => listen("pins:changed", () => handler()),
 
   // 查看完整内容（全文 / 原图，单窗口跟着当前条目换内容）
   openViewer: (id: number) => invoke<void>("open_viewer", { id }),

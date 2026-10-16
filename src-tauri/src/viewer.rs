@@ -46,6 +46,8 @@ pub fn open_viewer(app: &AppHandle, clip_id: i64) -> Result<(), String> {
     }
 
     let (width, height) = view_size(&clip);
+    // transparent + shadow(false)：窗口本身就是一张圆角玻璃卡片（CSS 负责圆角），
+    // 和面板 / 悬浮球 / 贴图一致；Windows 的方形投影会把这圈圆角画成直角，所以关掉
     let window = WebviewWindowBuilder::new(app, VIEWER_LABEL, WebviewUrl::App("index.html".into()))
         .title("PPClip 查看")
         .inner_size(width as f64, height as f64)
@@ -53,8 +55,8 @@ pub fn open_viewer(app: &AppHandle, clip_id: i64) -> Result<(), String> {
         .resizable(true)
         .always_on_top(true)
         .skip_taskbar(true)
-        .shadow(true)
-        .transparent(false)
+        .shadow(false)
+        .transparent(true)
         .visible(false)
         .build()
         .map_err(|e| format!("创建查看窗口失败: {e}"))?;

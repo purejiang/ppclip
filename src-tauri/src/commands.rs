@@ -30,8 +30,13 @@ pub fn update_settings(
         }
     }
     let _ = app.emit("clips:changed", ());
+    // 悬浮球（不透明度）等窗口也要跟着变，不能等下次启动
+    let _ = app.emit(SETTINGS_CHANGED_EVENT, ());
     Ok(())
 }
+
+/// 设置变化时广播（payload 为空，收到的一方自己去 `get_settings` 问）
+pub const SETTINGS_CHANGED_EVENT: &str = "settings:changed";
 
 #[tauri::command]
 pub fn get_data_dir(app: AppHandle) -> String {
@@ -65,10 +70,10 @@ pub fn hide_panel(app: AppHandle) {
     crate::hide_panel(&app);
 }
 
-/// 隐藏悬浮球。恢复入口：再次启动 PPClip（单实例回调会把它显示回来）。
+/// 隐藏悬浮入口。恢复入口：再次启动 PPClip（单实例回调会把它显示回来）。
 #[tauri::command]
 pub fn hide_ball(app: AppHandle) {
-    // 先收回枢纽态：窗口藏起来后前端收不到 mouseleave，会带着 240×240 的
+    // 先收回枢纽态：窗口藏起来后前端收不到 mouseleave，会带着 260×260 的
     // 大窗口再出现（那时鼠标在别处，看着就像个卡住的大方块）
     if let Err(err) = crate::ballhub::set_expanded(&app, false) {
         log::warn!("隐藏悬浮球前收回枢纽态失败: {err}");
@@ -85,11 +90,51 @@ pub fn show_ball(app: AppHandle) {
     }
 }
 
-/// 鼠标悬停时把悬浮球窗口撑成枢纽态（中心球 + 四个环绕按钮），移开还原。
-/// 几何换算见 `crate::ballhub`：球的屏幕位置不动是硬要求。
+/// 悬浮球当前是不是露着的（设置页的开关要如实反映状态）
+#[tauri::command]
+pub fn ball_visible(app: AppHandle) -> bool {
+    app.get_webview_window("ball")
+        .and_then(|ball| ball.is_visible().ok())
+        .unwrap_or(false)
+}
+
+/// 标签贴在屏幕哪一侧（"left" / "right"）。
+/// 吸附发生在启动阶段，那时前端还没挂上监听，所以除了 `ball:state` 事件还要能主动问一次。
+#[tauri::command]
+pub fn ball_state(app: AppHandle) -> String {
+    crate::ballhub::state_name(&app).to_string()
+}
+
+/// 开机自启开关：注册表是唯一真相，这里每次现场读
+#[tauri::command]
+pub fn is_autostart_enabled() -> bool {
+    crate::autostart::is_enabled()
+}
+
+#[tauri::command]
+pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    match crate::autostart::set(enabled) {
+        Ok(()) => Ok(()),
+        // 失败一定要落日志：前端的提示条会自己消失，注册表没写上是很难事后发现的
+        Err(err) => {
+            log::error!("切换开机自启失败（目标状态 {enabled}）: {err}");
+            Err(err)
+        }
+    }
+}
+
+/// 鼠标悬停时把悬浮球撑成 HUD 轮盘（中心 + 四个卫星按钮），移开还原。
+/// 几何换算见 `crate::ballhub`：形状中心不动是硬要求。
 #[tauri::command]
 pub fn set_ball_expanded(app: AppHandle, expanded: bool) -> Result<(), String> {
     crate::ballhub::set_expanded(&app, expanded)
+}
+
+/// 切「贴边胶囊 ↔ 常规球」。稿子里胶囊上 hover / click 是「唤出常规态」，
+/// 拖到屏幕边缘又会自动吸回去，所以这个开关两端都要能拨。
+#[tauri::command]
+pub fn set_ball_docked(app: AppHandle, docked: bool) -> Result<(), String> {
+    crate::ballhub::set_docked(&app, docked)
 }
 
 #[tauri::command]
@@ -99,12 +144,23 @@ pub fn save_ball_position(
     x: i32,
     y: i32,
 ) -> Result<(), String> {
-    // 枢纽态下窗口是按球心重新定位过的，此时的左上角不是「悬浮球的位置」；
+    // 枢纽态下窗口是按标签中心重新定位过的，此时的左上角不是「悬浮球的位置」；
     // 存下去下次启动就会从偏移过的位置冒出来（程序自己挪窗也会触发 onMoved）
     if crate::ballhub::is_expanded(&app) {
         log::debug!("忽略枢纽态下的悬浮球位置上报: ({x}, {y})");
         return Ok(());
     }
+    // 拖完就吸附到最近的屏幕边缘：稿子里的标签是「边缘停靠」的，而且吸附会把
+    // 那块吃点击的透明区推到屏幕外。吸附是幂等的，它自己触发的 onMoved 再来一次也没事
+    if let Err(err) = crate::ballhub::dock(&app) {
+        log::warn!("悬浮球吸附失败: {err}");
+    }
+    let docked = app
+        .get_webview_window("ball")
+        .and_then(|ball| ball.outer_position().ok())
+        .unwrap_or(tauri::PhysicalPosition::new(x, y));
+    let (x, y) = (docked.x, docked.y);
+
     save_position(&app, state, |s| {
         s.ball_x = Some(x);
         s.ball_y = Some(y);

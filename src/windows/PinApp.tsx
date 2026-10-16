@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { api, assetUrl, dataDir, windowLabel } from "../api";
+import { IconClose } from "../components/icons";
 import type { Clip } from "../types";
 
 /** 贴图几何回写节流：拖动过程中不必每一帧都写库 */
@@ -82,9 +83,10 @@ export default function PinApp() {
         type="button"
         className="pin-close"
         title="关闭贴图"
+        aria-label="关闭贴图"
         onClick={() => void api.deletePin(pinId)}
       >
-        ✕
+        <IconClose size={13} />
       </button>
 
       {src ? (

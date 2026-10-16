@@ -7,6 +7,10 @@ export interface AppSettings {
   /** 悬浮球位置（物理像素，null = 默认位置） */
   ballX: number | null;
   ballY: number | null;
+  /** 悬浮球不透明度（20~100，%） */
+  ballOpacity: number;
+  /** 面板里单击条目直接复制（false = 单击看详情） */
+  clickToCopy: boolean;
   /** 面板位置（物理像素，null = 居中） */
   panelX: number | null;
   panelY: number | null;
