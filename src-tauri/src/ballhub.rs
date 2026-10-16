@@ -1,11 +1,13 @@
 //! 悬浮球的三种形态（照 stitch 稿「桌面悬浮球三态规范」）：
 //!
-//! | 形态 | 尺寸 | 什么时候 |
+//! | 形态 | 形状尺寸 | 什么时候 |
 //! |---|---|---|
 //! | 贴边胶囊 Collapsed | 16×64 | 拖到屏幕左 / 右边缘自动吸附（对称胶囊，左右通用） |
 //! | 常规悬浮球 Floating Orb | 52×52 | 常态：桌面上任意位置 |
 //! | 展开态 HUD Wheel | 200×200 | 鼠标在胶囊 / 球上停 0.3 秒；离开收回 |
 //!
+//! 收起态的**窗口客户区**比形状大一圈：上下各留 `SHAPE_PAD_LOGICAL`（16 逻辑像素），
+//! 让投影与角标画得下 —— 见那个常量的注释，别把它当余量删掉。
 //! 稿子里展开态写的是 240×240，实际用下来偏大，这里收到 200（只改 `WHEEL_LOGICAL` 即可再调）。
 //!
 //! 三条硬约束（撑窗与吸附都绕不开）：
@@ -19,8 +21,8 @@
 //! 3. **轮盘要钳进显示器**。贴边时按中心撑出来的 200×200 会有一半在屏幕外，
 //!    那一侧的卫星按钮就点不到了（`clamp_into` 有单测）。
 //!
-//! 窗口尺寸的唯一真相在这里：前端只按 `ball:state` 事件切 CSS（窗口被藏起来时
-//! 前端收不到 mouseleave，只能靠事件兜底）。
+//! 窗口尺寸的唯一真相在这里：前端只按窗口客户区高度推当前形态（见设计决策 13），
+//! 所以改形状 / 余量必须同步 `src/windows/BallApp.tsx` 的阈值。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -34,6 +36,18 @@ pub const TAB_H_LOGICAL: f64 = 64.0;
 pub const ORB_LOGICAL: f64 = 52.0;
 /// 展开态轮盘（稿子 State 03 是 240×240，这里按「太大了」的反馈收到 200）
 pub const WHEEL_LOGICAL: f64 = 200.0;
+/// 形状四周留出的透明余量（逻辑像素）：**投影与角标要画得下**。
+///
+/// 竖向必须留：窗口宽度我们说了不算（`SM_CXMINTRACK` 会把无边框窗口撑到 136，
+/// 形状两侧天然各有 40+px 富余），但**高度是我们定的** —— 只要客户区高度 = 形状高度，
+/// 形状外的每一像素都在窗口外，`.ball-orb-body` 的 `0 4px 12px` 投影（往上 8、往下 16）
+/// 会被切得干干净净，实测剖面「形状上下边缘之外 = 0」，横向上却是完整的渐隐；
+/// 右上角计数角标（`top:-5px`）也被削掉上半截，贴边胶囊的顶部角标（`top:-9px`）
+/// 更是整颗都在窗口外、从来没显示过。留 16px 之后两者都画得下（含 hover 的 scale 1.05 / 1.1）。
+///
+/// ⚠️ 改这里要同步 `src/windows/BallApp.tsx` 的形态阈值（150 / 90）
+/// 与 `ballhub::tests::collapsed_windows_leave_room_for_the_shadow_and_the_badge`。
+pub const SHAPE_PAD_LOGICAL: f64 = 16.0;
 /// 形状中心离屏幕左右边缘多近（逻辑像素）就吸附成胶囊
 const DOCK_MARGIN: f64 = 40.0;
 
@@ -80,13 +94,20 @@ pub fn state_name(app: &AppHandle) -> &'static str {
     }
 }
 
-/// 收起态当前形态应有的窗口**逻辑**高度
-fn collapsed_h_logical(docked: bool) -> f64 {
+/// 收起态当前形态的**形状**高度（逻辑像素）—— 胶囊 64 / 球 52。
+/// 竖向钳制用它，不用窗口高度：形状四周那圈 16px 是留给投影的透明余量，
+/// 允许它探出屏幕外（贴边时形状应该能贴到屏幕上下边缘，跟横向一个道理）。
+fn collapsed_shape_h_logical(docked: bool) -> f64 {
     if docked {
         TAB_H_LOGICAL
     } else {
         ORB_LOGICAL
     }
+}
+
+/// 收起态当前形态的**窗口客户区**高度（逻辑像素）= 形状高度 + 上下各一圈余量。
+fn collapsed_h_logical(docked: bool) -> f64 {
+    collapsed_shape_h_logical(docked) + SHAPE_PAD_LOGICAL * 2.0
 }
 
 /// 收起态当前形态应有的**逻辑**宽度（胶囊细、球方）
@@ -209,6 +230,7 @@ pub fn set_docked(app: &AppHandle, docked: bool) -> Result<bool, String> {
 
     let inner_h = (collapsed_h_logical(docked) * scale).round().max(1.0) as u32;
     let shape_w = (collapsed_w_logical(docked) * scale).round().max(1.0) as i32;
+    let shape_h = (collapsed_shape_h_logical(docked) * scale).round().max(1.0) as i32;
     // 边框厚度照**当前实测**的 outer−inner 算，不按目标形态反推：
     // 胶囊（64 高）转常规球（52 高）时按 52 反推会凭空多出 12px，位置算歪、球会跳一下
     let frame = outer.height.saturating_sub(inner.height);
@@ -225,7 +247,9 @@ pub fn set_docked(app: &AppHandle, docked: bool) -> Result<bool, String> {
         // 钳制一律按**形状**算，不按窗口：窗口比形状宽得多（136 vs 16/52），
         // 按窗口钳会把球从鼠标底下推走 60px —— 贴边态转常规态时鼠标就停在形状上，
         // 那一下推走直接让鼠标落在球外面（点不到、也悬停不到）。
-        let center_y = clamp_center(cy.round() as i32, my, mh, inner_h as i32);
+        // 纵向同理用 `shape_h`：那一圈余量是透明的，允许探出屏幕，
+        // 否则胶囊会永远离屏幕上下边缘差 16px，贴不到边。
+        let center_y = clamp_center(cy.round() as i32, my, mh, shape_h);
         if docked {
             x = docked_x(cx.round() as i32, win_w, shape_w, mx, mw);
         } else {
@@ -394,10 +418,11 @@ mod tests {
 
     #[test]
     fn expanding_keeps_the_orb_center_still() {
-        // 常规球：窗口实测 136×52（52 被 SM_CXMINTRACK 撑宽），球心在 (1000, 500)
+        // 常规球：窗口实测 136×84（52 高 + 上下各 16 余量；52 宽被 SM_CXMINTRACK 撑宽），
+        // 球心在 (1000, 500)
         let geom = Collapsed {
-            pos: PhysicalPosition::new(932, 474),
-            size: PhysicalSize::new(136, 52),
+            pos: PhysicalPosition::new(932, 458),
+            size: PhysicalSize::new(136, 84),
             frame: 0,
         };
 
@@ -416,7 +441,7 @@ mod tests {
         // 右侧那颗卫星按钮就点不到了 —— 钳进来正好贴住右边
         let geom = Collapsed {
             pos: PhysicalPosition::new(1844, 420),
-            size: PhysicalSize::new(136, 64),
+            size: PhysicalSize::new(136, 96),
             frame: 0,
         };
 
@@ -427,7 +452,7 @@ mod tests {
             200,
             Some((0, 0, 1920, 1080)),
         );
-        assert_eq!(pos, PhysicalPosition::new(1720, 352));
+        assert_eq!(pos, PhysicalPosition::new(1720, 368));
     }
 
     #[test]
@@ -435,20 +460,57 @@ mod tests {
         // 有边框（总厚度 6）时：展开补边框、收起减回去，来回都不许漂
         let geom = Collapsed {
             pos: PhysicalPosition::new(900, 400),
-            size: PhysicalSize::new(136, 70),
+            size: PhysicalSize::new(136, 102),
             frame: 6,
         };
 
         let (edge, hub_pos) = expand_target(geom.size, geom.pos, geom.frame, 200, None);
         assert_eq!(edge, PhysicalSize::new(200, 200));
-        assert_eq!(hub_pos, PhysicalPosition::new(865, 332));
-        // 客户区（inner）中心 = 左上角 + 边框/2 + inner/2，仍应落在原形状中心 (968, 435)
+        assert_eq!(hub_pos, PhysicalPosition::new(865, 348));
+        // 客户区（inner）中心 = 左上角 + 边框/2 + inner/2，仍应落在原形状中心 (968, 451)
         assert_eq!(hub_pos.x as f64 + 3.0 + 100.0, 968.0);
-        assert_eq!(hub_pos.y as f64 + 3.0 + 100.0, 435.0);
+        assert_eq!(hub_pos.y as f64 + 3.0 + 100.0, 451.0);
 
         let (back_size, back_pos) = collapse_target(geom);
-        assert_eq!(back_size, PhysicalSize::new(130, 64));
+        assert_eq!(back_size, PhysicalSize::new(130, 96));
         assert_eq!(back_pos, geom.pos);
+    }
+
+    /// 收起态窗口必须给形状四周留出余量，否则投影与角标会被窗口边界切平。
+    ///
+    /// 现场实测（纯白底 + 亮色探针投影，160×160 样张的中心剖面）：
+    /// 不留余量时竖向剖面在形状上下边缘之外**全为 0**（投影整块被切掉），
+    /// 而横向 x 41..118（形状才 52 宽）是完整的渐隐 —— 因为窗口宽度被
+    /// `SM_CXMINTRACK` 撑到 136，横向天然有富余，竖向只有我们肯让才行。
+    /// 顺带被切掉的还有角标：球的 `top:-5px` 削掉上半截，贴边胶囊的 `top:-9px` 整颗在窗口外。
+    #[test]
+    fn collapsed_windows_leave_room_for_the_shadow_and_the_badge() {
+        assert_eq!(collapsed_shape_h_logical(false), ORB_LOGICAL);
+        assert_eq!(collapsed_shape_h_logical(true), TAB_H_LOGICAL);
+        assert_eq!(collapsed_h_logical(false), ORB_LOGICAL + SHAPE_PAD_LOGICAL * 2.0);
+        assert_eq!(collapsed_h_logical(true), TAB_H_LOGICAL + SHAPE_PAD_LOGICAL * 2.0);
+        // 投影（球的 0 4px 12px 往下要 16px、胶囊的 0 2px 8px 往下要 10px）画得下
+        assert!(SHAPE_PAD_LOGICAL >= 16.0, "常规球投影往下要 16px");
+        assert!(SHAPE_PAD_LOGICAL >= 10.0, "胶囊投影往下要 10px");
+        // 角标也得在窗口里：这俩值是 CSS 里 .ball-badge--corner / --top 的 top
+        assert!(SHAPE_PAD_LOGICAL >= 5.0, "常规球右上角标 top:-5px");
+        assert!(SHAPE_PAD_LOGICAL >= 9.0, "贴边胶囊顶部角标 top:-9px");
+        // 前端的形态阈值（`BallApp.tsx` 里写的 90）必须卡在 orb 与 tab 之间
+        assert!(
+            collapsed_h_logical(false) < 90.0 && 90.0 < collapsed_h_logical(true),
+            "BallApp 的阈值要跟着这里的余量走：orb {} / tab {}",
+            collapsed_h_logical(false),
+            collapsed_h_logical(true)
+        );
+    }
+
+    #[test]
+    fn clamping_the_shape_lets_it_touch_the_screen_edge() {
+        // 竖向钳制按**形状**算：形状是 64 高、窗口是 96 高（上下各 16 透明余量），
+        // 所以形状中心可以停在距边 32 处 —— 胶囊整条贴住屏幕上下边缘，
+        // 探出去的是透明余量（它本来就看不见，也不吃屏幕外的点击）。
+        assert_eq!(clamp_center(10, 0, 1080, 64), 32);
+        assert_eq!(clamp_center(2000, 0, 1080, 64), 1048);
     }
 
     #[test]

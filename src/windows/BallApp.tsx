@@ -73,11 +73,17 @@ export default function BallApp() {
   /** 逻辑像素换算用（窗口事件给的是物理像素） */
   const scaleRef = useRef(1);
 
-  /** 按窗口客户区高度认形态：展开态 200、胶囊 64、常规球 52（都留一点余量） */
+  /**
+   * 按窗口客户区高度认形态：展开态 200、贴边胶囊 64+32=96、常规球 52+32=84。
+   *
+   * 后两个数字 = 形状高度 + 上下各 16px 的透明余量（`ballhub::SHAPE_PAD_LOGICAL`，
+   * 留给投影和右上角标，别删），所以阈值取两者中间的 90。
+   * **改形状或余量要同步 `src-tauri/src/ballhub.rs`**（那边有单测卡这段关系）。
+   */
   const applySize = (height: number) => {
     const logical = height / (scaleRef.current || 1);
     setState((current) => {
-      const next: BallState = logical >= 150 ? "wheel" : logical >= 58 ? "tab" : "orb";
+      const next: BallState = logical >= 150 ? "wheel" : logical >= 90 ? "tab" : "orb";
       // 收起态的形态记下来：收回轮盘时先用它切换 CSS（等窗口真缩回去再切就看不到淡出）
       if (next !== "wheel") formRef.current = next;
       return next === current ? current : next;
