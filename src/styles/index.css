@@ -1482,7 +1482,6 @@ input[type="range"].slider::-webkit-slider-thumb {
   font-size: 9px;
   font-weight: 700;
   line-height: 14px;
-  box-shadow: 0 0 8px rgb(var(--primary-rgb) / 80%);
   pointer-events: none;
 }
 
@@ -1529,34 +1528,10 @@ input[type="range"].slider::-webkit-slider-thumb {
   cursor: grabbing;
 }
 
-/* 呼吸光晕：`-inset-2.5 blur-md` 的那层主色雾 */
-.ball-orb-halo {
-  position: absolute;
-  inset: -10px;
-  border-radius: 999px;
-  background: rgb(var(--primary-rgb) / 20%);
-  filter: blur(12px);
-  animation: orb-breathe 2.6s ease-in-out infinite;
-  transition: background 200ms ease;
-}
+/* 呼吸光晕：稿子里有（`-inset-2.5 blur-md` 的主色雾），但实机看着就是一圈糊光，
+   已按反馈去掉；常规态只留下面那圈 2px 渐变环。 */
 
-.ball-orb:hover .ball-orb-halo {
-  background: rgb(var(--primary-rgb) / 30%);
-}
-
-@keyframes orb-breathe {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: scale(0.96);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.06);
-  }
-}
-
-/* 2px 渐变环（primary/40 → primary → tertiary） */
+/* 2px 渐变环（primary/40 → primary → tertiary）+ 中性投影，不往外发光 */
 .ball-orb-body {
   position: relative;
   display: block;
@@ -1570,9 +1545,7 @@ input[type="range"].slider::-webkit-slider-thumb {
     var(--primary),
     var(--tertiary)
   );
-  box-shadow:
-    0 0 24px rgb(var(--primary-rgb) / 45%),
-    0 8px 20px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
   transition: transform 200ms cubic-bezier(0.22, 0.9, 0.3, 1.1);
 }
 
@@ -1606,7 +1579,7 @@ input[type="range"].slider::-webkit-slider-thumb {
   border: 1px solid rgb(var(--primary-rgb) / 40%);
   border-radius: 999px;
   background: rgb(var(--surface-container-high) / 90%);
-  box-shadow: 0 0 18px rgb(var(--primary-rgb) / 35%);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   color: var(--primary);
   opacity: 0;
   pointer-events: none;

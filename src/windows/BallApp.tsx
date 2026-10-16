@@ -44,11 +44,15 @@ interface PointerState {
  * 悬浮入口的三种形态（照 stitch 稿「桌面悬浮球三态规范」）：
  *
  * - **贴边胶囊（Collapsed）**：16×64 的对称胶囊，拖到屏幕左 / 右边缘自动吸附；
- *   三颗小点 + 顶部计数角标；点一下唤出常规态（稿子的说法），拖走就离开边缘。
- * - **常规球（Floating Orb）**：52×52 的渐变环圆盘 + 呼吸光晕 + 右上计数角标，
- *   桌面任意位置，左键开合面板。
- * - **展开态（HUD Wheel）**：鼠标停住 0.3 秒后窗口撑成 200×200，露出玻璃圆盘、
- *   虚线轨道、四个卫星按钮和中心圆盘；鼠标一离开就收回。
+ *   三颗小点 + 顶部计数角标。
+ * - **常规球（Floating Orb）**：52×52 的 2px 渐变环圆盘（不发光晕）+ 右上计数角标，
+ *   桌面任意位置。
+ * - **展开态（HUD Wheel）**：玻璃圆盘、虚线轨道、四个卫星按钮、中心圆盘。
+ *
+ * 交互（三段式，鼠标不用点就能一路走到底）：
+ * 1. 鼠标放到**贴边胶囊**上 → 立刻变**常规态**（不展开）；
+ * 2. 鼠标在**常规态**上停满 0.3 秒 → 展开成**轮盘**，移开就收回；
+ * 3. 两种收起态的**单击**都直接开合主面板（拖动则是拖走，右键出原生菜单）。
  *
  * 窗口尺寸的真身由 Rust 侧 `ballhub` 管（形状中心要钉在原地），这里只负责
  * 「什么时候该展开」和 CSS 状态；`ball:state` 事件用来兜底同步（截图前藏窗口时
@@ -59,11 +63,35 @@ export default function BallApp() {
   const collapseTimer = useRef<number | undefined>(undefined);
   /** 悬停展开的倒计时（中途移开 / 开始拖动就清掉） */
   const openTimer = useRef<number | undefined>(undefined);
+  /** 「胶囊 → 常规态」这次切换是否还在飞（防止 pointermove 连发重复调用命令） */
+  const undocking = useRef(false);
   /** 鼠标是否还在窗口里：展开是异步的，回来时得再确认一次才点亮 */
   const hovered = useRef(false);
   const [state, setState] = useState<BallState>("orb");
   /** 收起态的形态（tab / orb）：收回轮盘时照它还原，免得先闪一下常规球 */
   const formRef = useRef<"tab" | "orb">("orb");
+  /** 逻辑像素换算用（窗口事件给的是物理像素） */
+  const scaleRef = useRef(1);
+
+  /** 按窗口客户区高度认形态：展开态 200、胶囊 64、常规球 52（都留一点余量） */
+  const applySize = (height: number) => {
+    const logical = height / (scaleRef.current || 1);
+    setState((current) => {
+      const next: BallState = logical >= 150 ? "wheel" : logical >= 58 ? "tab" : "orb";
+      // 收起态的形态记下来：收回轮盘时先用它切换 CSS（等窗口真缩回去再切就看不到淡出）
+      if (next !== "wheel") formRef.current = next;
+      return next === current ? current : next;
+    });
+  };
+
+  /** 主动量一次当前尺寸（onMoved 兜底用） */
+  const syncFormFromSize = async () => {
+    try {
+      applySize((await getCurrentWindow().innerSize()).height);
+    } catch (err) {
+      console.error("读取悬浮球尺寸失败", err);
+    }
+  };
   /** 悬浮球不透明度（%，来自设置） */
   const [opacity, setOpacity] = useState(100);
   /** 面板关着的时候新收进来的剪贴板条数（角标） */
@@ -100,33 +128,29 @@ export default function BallApp() {
       .then((s) => setOpacity(s.ballOpacity))
       .catch((err) => console.error("读取悬浮球设置失败", err));
 
-    // 吸附 / 形态切换发生在启动阶段（早于这里挂监听），所以主动问一次当前形态
-    void api
-      .ballState()
-      .then((name) => {
-        if (name === "tab" || name === "orb") formRef.current = name;
-        setState(name === "tab" || name === "wheel" ? name : "orb");
-      })
-      .catch((err) => console.error("读取悬浮球形态失败", err));
-
     let timer: number | undefined;
     const unlistenMoved = win.onMoved(({ payload }) => {
+      // 形态切换会伴一次移窗，顺手按最新尺寸核对一遍形态（兜底）
+      void syncFormFromSize();
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         void api.saveBallPosition(Math.round(payload.x), Math.round(payload.y));
       }, SAVE_DELAY_MS);
     });
+    // **形态直接由窗口尺寸推**：Rust 是几何的唯一真相，尺寸变了就是形态变了。
+    // 之前用自定义事件同步踩过坑：`listen()` 注册是异步的，启动时的吸附/摆正正好落在
+    // 「问」与「注册完成」之间 → 事件漏掉、查询又拿到旧值，前端会一直以为自己是常规球
+    // （悬停直接展开轮盘），而窗口其实已经是胶囊。尺寸推导不会有这种时序问题。
+    const unlistenResized = win.onResized(({ payload }) => applySize(payload.height));
+    void win
+      .scaleFactor()
+      .then((factor) => {
+        scaleRef.current = factor;
+        return win.innerSize();
+      })
+      .then((size) => applySize(size.height))
+      .catch((err) => console.error("读取悬浮球尺寸失败", err));
 
-    // Rust 是形态的真相：它会把窗口撑大 / 缩回 / 吸附，这里跟着改 CSS
-    const unlistenState = api.onBallState((name) => {
-      window.clearTimeout(collapseTimer.current);
-      if (name === "wheel") {
-        setState("wheel");
-        return;
-      }
-      if (name === "tab" || name === "orb") formRef.current = name;
-      setState((current) => (current === "wheel" ? current : formRef.current));
-    });
     const unlistenSettings = api.onSettingsChanged(() => {
       void api
         .getSettings()
@@ -148,7 +172,7 @@ export default function BallApp() {
       window.clearTimeout(collapseTimer.current);
       window.clearTimeout(openTimer.current);
       void unlistenMoved.then((fn) => fn());
-      void unlistenState.then((fn) => fn());
+      void unlistenResized.then((fn) => fn());
       void unlistenSettings.then((fn) => fn());
       void unlistenPanel.then((fn) => fn());
       void unlistenClips.then((fn) => fn());
@@ -166,15 +190,52 @@ export default function BallApp() {
       .catch((err) => console.error("展开悬浮球失败", err));
   };
 
-  /** 鼠标进窗口：停满 HOVER_OPEN_DELAY_MS 才展开，中途移开就作废 */
-  const onHoverEnter = () => {
+  /** 开始「停在常规态上」的计时：到点才展开轮盘 */
+  const armExpand = () => {
+    if (open || openTimer.current !== undefined) return;
     hovered.current = true;
     window.clearTimeout(collapseTimer.current);
-    window.clearTimeout(openTimer.current);
-    if (open) return;
     openTimer.current = window.setTimeout(() => {
+      openTimer.current = undefined;
       if (hovered.current) expandHub();
     }, HOVER_OPEN_DELAY_MS);
+  };
+
+  /** 悬停作废（移出球面 / 开始拖动 / 离开窗口） */
+  const disarmExpand = () => {
+    window.clearTimeout(openTimer.current);
+    openTimer.current = undefined;
+  };
+
+  /**
+   * 鼠标在窗口里：按**当前位置压在哪个形状上**决定做什么。
+   *
+   * 用 `event.target` 判断，而不是「进了窗口就算」—— 窗口比形状宽得多
+   * （无边框窗口被 SM_CXMINTRACK 撑到 136，形状只有 16 / 52 宽，见已知问题 12），
+   * 光标从旁边那块透明区滑过时不该展开轮盘、也不该把那块桌面点击吃掉。
+   *
+   * 三种形态的语义（照稿子）：
+   * - 贴边胶囊上：**先变常规态**（不进展开计时）—— 是不是要继续展开，交给下面的常规态决定；
+   * - 常规态上：停满 `HOVER_OPEN_DELAY_MS` 才展开轮盘，中途移开就作废；
+   * - 展开态：什么都不做（卫星按钮与中心盘自己管自己）。
+   */
+  const evaluateHover = (e: React.PointerEvent) => {
+    const target = e.target as Element | null;
+    if (state === "tab") {
+      if (!target?.closest(".ball-tab") || undocking.current) return;
+      // 折叠态鼠标一放上去就展开成常规态（稿子 State 01 的 hover 语义）
+      undocking.current = true;
+      void api
+        .setBallDocked(false)
+        .catch((err) => console.error("唤出常规态失败", err))
+        .then(() => {
+          undocking.current = false;
+        });
+      return;
+    }
+    if (state !== "orb" || open) return;
+    if (target?.closest(".ball-orb")) armExpand();
+    else disarmExpand();
   };
 
   /** 收回轮盘；默认延迟一点，让退场动画播完再缩窗 */
@@ -230,7 +291,11 @@ export default function BallApp() {
     void api
       .setBallExpanded(false)
       .catch((err) => console.error("拖动前收回悬浮球失败", err))
-      .then(() => getCurrentWindow().startDragging());
+      .then(() => getCurrentWindow().startDragging())
+      // startDragging 的 Promise 在松手之后才 resolve：这时才让 Rust 按落点定形态
+      // （靠边就吸成胶囊）。挂在位置上报上会把刚唤出来的常规态吸回去
+      .then(() => api.finishBallDrag())
+      .catch((err) => console.error("结束拖动失败", err));
   };
 
   /** 松手后 Rust 会按落点决定形态（贴边就吸成胶囊），前端只等 `ball:state` */
@@ -238,23 +303,9 @@ export default function BallApp() {
     pointer.current = null;
   };
 
-  /** 常规球：单击开合面板（顺手收回轮盘，别让它从面板边缘探出来） */
-  const onOrbClick = () => {
+  /** 常规球 / 贴边胶囊：单击直接开合主面板（顺手收回轮盘，别让它从面板边缘探出来） */
+  const onShapeClick = () => {
     runSatellite(api.togglePanel);
-  };
-
-  /** 贴边胶囊：单击唤出常规态（稿子 State 01：「hover / click 唤出常规态」） */
-  const onTabClick = () => {
-    hovered.current = false;
-    window.clearTimeout(openTimer.current);
-    window.clearTimeout(collapseTimer.current);
-    markClosed();
-    void api
-      .setBallExpanded(false)
-      .catch(() => undefined)
-      .then(() => api.setBallDocked(false))
-      .then(() => setState("orb"))
-      .catch((err) => console.error("唤出常规态失败", err));
   };
 
   const onContextMenu = (e: React.MouseEvent) => {
@@ -273,7 +324,9 @@ export default function BallApp() {
     <div
       className={`ball-root is-${state}`}
       style={{ opacity: opacity / 100 }}
-      onPointerEnter={onHoverEnter}
+      onPointerEnter={evaluateHover}
+      onPointerOver={evaluateHover}
+      onPointerMove={evaluateHover}
       onPointerLeave={() => collapseHub()}
     >
       <div className="ball-hub">
@@ -334,16 +387,15 @@ export default function BallApp() {
           </button>
         </div>
 
-        {/* 常规态：52×52 悬浮球 */}
+        {/* 常规态：52×52 悬浮球（无发光晕，只有 2px 渐变环） */}
         <button
           type="button"
           className="ball-orb"
-          title="PPClip：左键开合面板，右键菜单，按住可拖动；悬停展开快捷按钮"
+          title="PPClip：单击开合面板，右键菜单，按住可拖动；停住不动展开快捷按钮"
           aria-label="PPClip 悬浮球"
-          onClick={onOrbClick}
+          onClick={onShapeClick}
           {...pointerHandlers}
         >
-          <span className="ball-orb-halo" aria-hidden="true" />
           <span className="ball-orb-body">
             <span className="ball-orb-inner">
               <IconClipboardArrow size={22} />
@@ -360,9 +412,9 @@ export default function BallApp() {
         <button
           type="button"
           className="ball-tab"
-          title="PPClip：单击唤出常规态，按住可拖离边缘；悬停展开快捷按钮"
+          title="PPClip：鼠标放上来变常规态，单击开合面板，按住可拖离边缘"
           aria-label="PPClip 悬浮入口（贴边）"
-          onClick={onTabClick}
+          onClick={onShapeClick}
           {...pointerHandlers}
         >
           <span className="ball-tab-dots" aria-hidden="true">

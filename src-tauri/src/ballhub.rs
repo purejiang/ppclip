@@ -25,7 +25,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
 
 /// 贴边胶囊（稿子 State 01）的逻辑尺寸
 pub const TAB_W_LOGICAL: f64 = 16.0;
@@ -36,8 +36,6 @@ pub const ORB_LOGICAL: f64 = 52.0;
 pub const WHEEL_LOGICAL: f64 = 200.0;
 /// 形状中心离屏幕左右边缘多近（逻辑像素）就吸附成胶囊
 const DOCK_MARGIN: f64 = 40.0;
-/// 形态变化事件：payload 是 `"tab"` / `"orb"` / `"wheel"`
-pub const STATE_EVENT: &str = "ball:state";
 
 /// 展开前那一刻的收起态窗口几何（**实测**值）
 #[derive(Clone, Copy)]
@@ -82,15 +80,19 @@ pub fn state_name(app: &AppHandle) -> &'static str {
     }
 }
 
-/// 广播形态变化（前端只镜像 CSS）
-fn emit_state(app: &AppHandle) {
-    let _ = app.emit_to("ball", STATE_EVENT, state_name(app));
-}
-
 /// 收起态当前形态应有的窗口**逻辑**高度
 fn collapsed_h_logical(docked: bool) -> f64 {
     if docked {
         TAB_H_LOGICAL
+    } else {
+        ORB_LOGICAL
+    }
+}
+
+/// 收起态当前形态应有的**逻辑**宽度（胶囊细、球方）
+fn collapsed_w_logical(docked: bool) -> f64 {
+    if docked {
+        TAB_W_LOGICAL
     } else {
         ORB_LOGICAL
     }
@@ -155,7 +157,6 @@ pub fn set_expanded(app: &AppHandle, expanded: bool) -> Result<(), String> {
         .map_err(|e| format!("调整悬浮球尺寸失败: {e}"))?;
     win.set_position(target_pos)
         .map_err(|e| format!("调整悬浮球位置失败: {e}"))?;
-    emit_state(app);
 
     log::debug!(
         "悬浮球 → {}：{}×{} @({}, {}) → {}×{} @({}, {})",
@@ -177,17 +178,20 @@ pub fn set_expanded(app: &AppHandle, expanded: bool) -> Result<(), String> {
 /// 形状在窗口里居中，所以切换时**保持形状中心**，只改窗口高度；
 /// 吸附成胶囊时再把窗口横向推出去，让 16 宽的胶囊正好贴住屏幕边
 /// （顺带把窗口两侧那块吃点击的透明区推到屏幕外）。
-/// 幂等：目标状态已经满足时是空操作。
-pub fn set_docked(app: &AppHandle, docked: bool) -> Result<(), String> {
+/// 关于横向钳制：一律按**形状**算（`clamp_center`），不按窗口 —— 窗口宽 136、形状才 52，
+/// 按窗口钳会把球从鼠标底下推走 60px，鼠标一转眼就落在球外面（点不到也悬停不到）。
+/// 返回值是**生效后**的形态：展开态里不切形态，这时返回原来的形态。
+/// 幂等：目标状态已经满足时不动窗口。
+pub fn set_docked(app: &AppHandle, docked: bool) -> Result<bool, String> {
     let (Some(state), Some(win)) = (
         app.try_state::<BallHubState>(),
         app.get_webview_window("ball"),
     ) else {
-        return Ok(());
+        return Ok(docked);
     };
     // 展开态下不切形态：先收回（前端负责顺序），免得把轮盘改成小球
     if state.expanded.load(Ordering::Relaxed) {
-        return Ok(());
+        return Ok(state.docked.load(Ordering::Relaxed));
     }
 
     let scale = win
@@ -204,7 +208,10 @@ pub fn set_docked(app: &AppHandle, docked: bool) -> Result<(), String> {
         .map_err(|e| format!("读取悬浮球位置失败: {e}"))?;
 
     let inner_h = (collapsed_h_logical(docked) * scale).round().max(1.0) as u32;
-    let frame = outer.height.saturating_sub(inner_h);
+    let shape_w = (collapsed_w_logical(docked) * scale).round().max(1.0) as i32;
+    // 边框厚度照**当前实测**的 outer−inner 算，不按目标形态反推：
+    // 胶囊（64 高）转常规球（52 高）时按 52 反推会凭空多出 12px，位置算歪、球会跳一下
+    let frame = outer.height.saturating_sub(inner.height);
     let outer_h = inner_h + frame;
     let (win_w, win_h) = (outer.width as i32, outer.height as i32);
 
@@ -215,17 +222,19 @@ pub fn set_docked(app: &AppHandle, docked: bool) -> Result<(), String> {
     let mut x = pos.x;
     let mut y = (cy - outer_h as f64 / 2.0).round() as i32;
     if let Some((mx, my, mw, mh)) = monitor_bounds(&win) {
+        // 钳制一律按**形状**算，不按窗口：窗口比形状宽得多（136 vs 16/52），
+        // 按窗口钳会把球从鼠标底下推走 60px —— 贴边态转常规态时鼠标就停在形状上，
+        // 那一下推走直接让鼠标落在球外面（点不到、也悬停不到）。
+        let center_y = clamp_center(cy.round() as i32, my, mh, inner_h as i32);
         if docked {
-            let tab_w = (TAB_W_LOGICAL * scale).round().max(1.0) as i32;
-            x = docked_x(cx.round() as i32, win_w, tab_w, mx, mw);
+            x = docked_x(cx.round() as i32, win_w, shape_w, mx, mw);
         } else {
-            // 从贴边状态回到桌面：窗口原本有一半在屏幕外，必须推回可视区
-            x = clamp_into((cx - win_w as f64 / 2.0).round() as i32, mx, mw, win_w);
+            let center_x = clamp_center(cx.round() as i32, mx, mw, shape_w);
+            x = (center_x as f64 - win_w as f64 / 2.0).round() as i32;
         }
-        y = clamp_into(y, my, mh, outer_h as i32);
+        y = (center_y as f64 - outer_h as f64 / 2.0).round() as i32;
     } else if docked {
-        let tab_w = (TAB_W_LOGICAL * scale).round().max(1.0) as i32;
-        x = cx.round() as i32 - win_w / 2 - (win_w - tab_w) / 2;
+        x = cx.round() as i32 - win_w / 2 - (win_w - shape_w) / 2;
     }
 
     state.docked.store(docked, Ordering::Relaxed);
@@ -237,8 +246,7 @@ pub fn set_docked(app: &AppHandle, docked: bool) -> Result<(), String> {
         win.set_position(PhysicalPosition::new(x, y))
             .map_err(|e| format!("调整悬浮球位置失败: {e}"))?;
     }
-    emit_state(app);
-    log::debug!(
+    log::info!(
         "悬浮球形态 → {}：{}×{} @({}, {}) → {}×{} @({}, {})",
         state_name(app),
         win_w,
@@ -250,21 +258,25 @@ pub fn set_docked(app: &AppHandle, docked: bool) -> Result<(), String> {
         x,
         y
     );
-    Ok(())
+    Ok(state.docked.load(Ordering::Relaxed))
 }
 
-/// 拖完（`save_ball_position`）与启动时按当前位置决定形态：**幂等**。
+/// **拖动结束时**按落点决定形态（`finish_ball_drag`）：**幂等**。
 ///
 /// 判定只看形状中心离屏幕左右边缘有多远：进了 40 逻辑像素以内就吸附成胶囊，
 /// 否则回到常规球。因为吸附后窗口会故意探出屏幕 60px（中心离边 8px），
 /// 第二次调用依然判定为「贴边」，不会来回抖。
-pub fn dock(app: &AppHandle) -> Result<(), String> {
+///
+/// ⚠️ 只在**拖动结束**时调用，别挂在每次位置上报上：常规球被钳进可视区之后
+/// 左边缘同样贴着屏幕，位置上报一多就会被误判成「想贴边」，把刚唤出来的常规态吸回去。
+/// 返回值是生效后的形态。
+pub fn dock(app: &AppHandle) -> Result<bool, String> {
     let Some(win) = app.get_webview_window("ball") else {
-        return Ok(());
+        return Ok(is_docked(app));
     };
     // 展开态下窗口是按形状中心重定位过的大窗，此时吸附没有意义
     if is_expanded(app) {
-        return Ok(());
+        return Ok(is_docked(app));
     }
     let scale = win
         .scale_factor()
@@ -276,17 +288,20 @@ pub fn dock(app: &AppHandle) -> Result<(), String> {
         .outer_position()
         .map_err(|e| format!("读取悬浮球位置失败: {e}"))?;
     let Some((mx, _my, mw, _mh)) = monitor_bounds(&win) else {
-        return Ok(());
+        return Ok(is_docked(app));
     };
 
-    let center_x = pos.x as f64 + size.width as f64 / 2.0;
-    let margin = (DOCK_MARGIN * scale).round();
-    let near_left = center_x - mx as f64 <= margin;
-    let near_right = (mx + mw) as f64 - center_x <= margin;
+    // 判定用**形状**中心离边缘的距离：窗口中心会因为窗口被撑宽而偏（136 宽里形状只占 52）
+    let shape_w = (collapsed_w_logical(is_docked(app)) * scale).round().max(1.0) as i32;
+    let shape_left = pos.x + (size.width as i32 - shape_w) / 2;
+    let shape_center = shape_left + shape_w / 2;
+    let margin = (DOCK_MARGIN * scale).round() as i32;
+    let near_left = shape_center - mx <= margin;
+    let near_right = (mx + mw) - shape_center <= margin;
     let want_docked = near_left || near_right;
 
-    // 即使形态没变也要走一遍 `set_docked`：它会按形态把窗口尺寸摆正
-    // （启动时窗口还是 tauri.conf 里的高度，不摆的话常规态会多出十几像素的透明区）
+    // 即使形态没变也要走一遍 `set_docked`：它会把窗口尺寸与位置摆正
+    // （窗口高度按形态是 64 / 52，位置按形状中心重新算）
     set_docked(app, want_docked)
 }
 
@@ -340,6 +355,15 @@ fn collapse_target(geom: Collapsed) -> (PhysicalSize<u32>, PhysicalPosition<i32>
 /// 把长度 `size` 的窗口钳进 [start, start+extent]；显示器比窗口还小时贴左上角
 fn clamp_into(value: i32, start: i32, extent: i32, size: i32) -> i32 {
     value.clamp(start, (start + extent - size).max(start))
+}
+
+/// 把**形状中心**钳到「形状整块留在显示器内」的范围里（纯算术，单测）。
+///
+/// 与 `clamp_into` 的区别是这里管的是形状不是窗口：形状在窗口里居中，
+/// 窗口两侧那圈透明区允许探出屏幕（贴边态正是靠这个把吃点击的透明区推出去）。
+fn clamp_center(center: i32, start: i32, extent: i32, shape: i32) -> i32 {
+    let half = (shape / 2).max(0);
+    center.clamp(start + half, (start + extent - half).max(start + half))
 }
 
 /// 吸附成胶囊后的窗口左上角 x（纯算术，单测）。
@@ -446,6 +470,26 @@ mod tests {
         assert_eq!(clamp_into(1900, 0, 1920, 136), 1784);
         // 显示器比窗口还小：贴左上角，别算出负数
         assert_eq!(clamp_into(50, 0, 100, 136), 0);
+    }
+
+    #[test]
+    fn undocking_keeps_the_orb_under_the_pointer() {
+        // 胶囊贴左边缘：窗口 -60..76，形状（16 宽）占 0..16、中心 8，鼠标停在形状中心
+        // 转常规态（52 宽）时，中心 8 会让球占到 -18..34 —— 一半在屏幕外、鼠标还落在球外。
+        // 按形状钳到中心 26、窗口于是停在 -42，球占 0..52：整块可见，鼠标（8）仍在球上。
+        let center = clamp_center(8, 0, 1920, 52);
+        assert_eq!(center, 26);
+        let win_x = center - 136 / 2;
+        assert_eq!(win_x, -42);
+        assert!(win_x <= 8 && 8 <= win_x + 136, "鼠标仍应落在窗口里");
+        let (orb_left, orb_right) = (center - 26, center + 26);
+        assert!(orb_left >= 0 && orb_right <= 1920, "球要整块留在屏幕内");
+        assert!((orb_left..=orb_right).contains(&8), "鼠标仍应落在球上");
+        // 球本来就在屏幕内时不该动它
+        assert_eq!(clamp_center(900, 0, 1920, 52), 900);
+        // 屏幕角落：中心被钳到距边 26
+        assert_eq!(clamp_center(-100, 0, 1920, 52), 26);
+        assert_eq!(clamp_center(5000, 0, 1920, 52), 1894);
     }
 
     #[test]

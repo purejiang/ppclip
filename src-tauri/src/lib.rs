@@ -247,14 +247,15 @@ pub fn run() {
             app.manage(ballhub::BallHubState::default());
             app.manage(DataDir(data_dir));
 
-            // 恢复悬浮球上次位置：先摆好，再吸附到最近的屏幕边缘（稿子里的 Edge Dock Tab）。
-            // 吸附同时保证标签整条落在屏幕内 —— 没有托盘，标签跑到屏幕外就等于应用没了
+            // 恢复悬浮球：先摆到上次的位置，再按上次记录的形态摆正几何
+            // （贴边胶囊 = 吸到最近的屏幕边缘并让它整条留在屏幕内；常规球 = 形状钳进可视区）。
+            // 形态不靠坐标反推 —— 常规球被钳到屏幕边时左边缘同样贴着 0，分不出来
             if let Some(ball) = app.get_webview_window("ball") {
                 if let (Some(x), Some(y)) = (settings.ball_x, settings.ball_y) {
                     let _ = ball.set_position(tauri::PhysicalPosition::new(x, y));
                 }
-                if let Err(err) = ballhub::dock(app.handle()) {
-                    log::warn!("启动时吸附悬浮球失败: {err}");
+                if let Err(err) = ballhub::set_docked(app.handle(), settings.ball_docked) {
+                    log::warn!("启动时摆正悬浮球失败: {err}");
                 }
             }
             if let Some(panel) = app.get_webview_window("main") {
@@ -341,11 +342,11 @@ pub fn run() {
             commands::hide_ball,
             commands::show_ball,
             commands::ball_visible,
-            commands::ball_state,
             commands::is_autostart_enabled,
             commands::set_autostart,
             commands::set_ball_expanded,
             commands::set_ball_docked,
+            commands::finish_ball_drag,
             commands::save_ball_position,
             commands::save_panel_position,
             commands::show_ball_menu,

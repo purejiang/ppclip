@@ -33,14 +33,11 @@ export const api = {
   /** 悬停枢纽态：Rust 按「形状中心不动」撑成 HUD 轮盘（见 src-tauri/src/ballhub.rs） */
   setBallExpanded: (expanded: boolean) =>
     invoke<void>("set_ball_expanded", { expanded }),
-  /** 切「贴边胶囊 ↔ 常规球」（胶囊上点一下 = 唤出常规态） */
+  /** 切「贴边胶囊 ↔ 常规球」（胶囊上鼠标一放上去 + 单击都走这里） */
   setBallDocked: (docked: boolean) =>
     invoke<void>("set_ball_docked", { docked }),
-  /** 当前形态："tab"（贴边胶囊）/ "orb"（常规球）/ "wheel"（展开态） */
-  ballState: () => invoke<string>("ball_state"),
-  /** 订阅形态变化：Rust 是窗口尺寸的唯一真相，前端只同步 CSS */
-  onBallState: (handler: (state: string) => void) =>
-    listen<string>("ball:state", (event) => handler(event.payload)),
+  /** 拖动结束：让 Rust 按落点决定是不是吸成胶囊（位置上报本身不改形态） */
+  finishBallDrag: () => invoke<void>("finish_ball_drag"),
   /** 订阅面板显示 / 隐藏（悬浮球标签上的「新条目」角标据此归零） */
   onPanelVisible: (handler: (visible: boolean) => void) =>
     listen<boolean>("panel:visible", (event) => handler(event.payload)),

@@ -98,13 +98,6 @@ pub fn ball_visible(app: AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-/// 标签贴在屏幕哪一侧（"left" / "right"）。
-/// 吸附发生在启动阶段，那时前端还没挂上监听，所以除了 `ball:state` 事件还要能主动问一次。
-#[tauri::command]
-pub fn ball_state(app: AppHandle) -> String {
-    crate::ballhub::state_name(&app).to_string()
-}
-
 /// 开机自启开关：注册表是唯一真相，这里每次现场读
 #[tauri::command]
 pub fn is_autostart_enabled() -> bool {
@@ -130,13 +123,32 @@ pub fn set_ball_expanded(app: AppHandle, expanded: bool) -> Result<(), String> {
     crate::ballhub::set_expanded(&app, expanded)
 }
 
-/// 切「贴边胶囊 ↔ 常规球」。稿子里胶囊上 hover / click 是「唤出常规态」，
-/// 拖到屏幕边缘又会自动吸回去，所以这个开关两端都要能拨。
+/// 切「贴边胶囊 ↔ 常规球」。胶囊上 hover / 单击都会走到这里（稿子里的「唤出常规态」），
+/// 形态显式落盘，下次启动就照它还原。
 #[tauri::command]
-pub fn set_ball_docked(app: AppHandle, docked: bool) -> Result<(), String> {
-    crate::ballhub::set_docked(&app, docked)
+pub fn set_ball_docked(
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+    docked: bool,
+) -> Result<(), String> {
+    let effective = crate::ballhub::set_docked(&app, docked)?;
+    persist_ball_form(&app, state, effective)
 }
 
+/// **拖动结束**时调用：按落点决定形态（靠边吸成胶囊），并把最终几何写回设置。
+///
+/// 位置上报（`save_ball_position`）只记坐标、不判形态：常规球被钳进可视区后左边缘
+/// 同样贴着屏幕，拿坐标反推形态会把刚唤出来的常规态吸回胶囊。
+#[tauri::command]
+pub fn finish_ball_drag(
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+) -> Result<(), String> {
+    let docked = crate::ballhub::dock(&app)?;
+    persist_ball_form(&app, state, docked)
+}
+
+/// 只记悬浮球坐标（拖动过程中前端会节流上报），不动形态
 #[tauri::command]
 pub fn save_ball_position(
     app: AppHandle,
@@ -144,26 +156,40 @@ pub fn save_ball_position(
     x: i32,
     y: i32,
 ) -> Result<(), String> {
-    // 枢纽态下窗口是按标签中心重新定位过的，此时的左上角不是「悬浮球的位置」；
+    // 展开态下窗口是按形状中心重新定位过的，此时的左上角不是「悬浮球的位置」；
     // 存下去下次启动就会从偏移过的位置冒出来（程序自己挪窗也会触发 onMoved）
     if crate::ballhub::is_expanded(&app) {
-        log::debug!("忽略枢纽态下的悬浮球位置上报: ({x}, {y})");
+        log::debug!("忽略展开态下的悬浮球位置上报: ({x}, {y})");
         return Ok(());
     }
-    // 拖完就吸附到最近的屏幕边缘：稿子里的标签是「边缘停靠」的，而且吸附会把
-    // 那块吃点击的透明区推到屏幕外。吸附是幂等的，它自己触发的 onMoved 再来一次也没事
-    if let Err(err) = crate::ballhub::dock(&app) {
-        log::warn!("悬浮球吸附失败: {err}");
-    }
-    let docked = app
+    // 吸附发生在 `finish_ball_drag` 里（拖动结束那一刻），这里只照当前真实位置落盘：
+    // 形状切来切去也会触发 onMoved，顺手把新位置存住
+    let pos = app
         .get_webview_window("ball")
         .and_then(|ball| ball.outer_position().ok())
         .unwrap_or(tauri::PhysicalPosition::new(x, y));
-    let (x, y) = (docked.x, docked.y);
 
     save_position(&app, state, |s| {
-        s.ball_x = Some(x);
-        s.ball_y = Some(y);
+        s.ball_x = Some(pos.x);
+        s.ball_y = Some(pos.y);
+    })
+}
+
+/// 形态 + 当前左上角一起落盘（形态一变位置也跟着变，两个字段要一起写）
+fn persist_ball_form(
+    app: &AppHandle,
+    state: State<'_, SettingsState>,
+    docked: bool,
+) -> Result<(), String> {
+    let pos = app
+        .get_webview_window("ball")
+        .and_then(|ball| ball.outer_position().ok());
+    save_position(app, state, |s| {
+        s.ball_docked = docked;
+        if let Some(pos) = pos {
+            s.ball_x = Some(pos.x);
+            s.ball_y = Some(pos.y);
+        }
     })
 }
 
