@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::models::{AppSettings, Clip, ClipKind, ClipStats, Pin, UpsertOutcome};
 use crate::storage::Storage;
-use crate::{capture, menu, pins, util, DataDir, SelfWrite, SettingsState};
+use crate::{capture, menu, pins, util, viewer, DataDir, SelfWrite, SettingsState};
 
 // ------------------------------------------------------------------ 设置
 
@@ -68,6 +68,11 @@ pub fn hide_panel(app: AppHandle) {
 /// 隐藏悬浮球。恢复入口：再次启动 PPClip（单实例回调会把它显示回来）。
 #[tauri::command]
 pub fn hide_ball(app: AppHandle) {
+    // 先收回枢纽态：窗口藏起来后前端收不到 mouseleave，会带着 240×240 的
+    // 大窗口再出现（那时鼠标在别处，看着就像个卡住的大方块）
+    if let Err(err) = crate::ballhub::set_expanded(&app, false) {
+        log::warn!("隐藏悬浮球前收回枢纽态失败: {err}");
+    }
     if let Some(ball) = app.get_webview_window("ball") {
         let _ = ball.hide();
     }
@@ -80,6 +85,13 @@ pub fn show_ball(app: AppHandle) {
     }
 }
 
+/// 鼠标悬停时把悬浮球窗口撑成枢纽态（中心球 + 四个环绕按钮），移开还原。
+/// 几何换算见 `crate::ballhub`：球的屏幕位置不动是硬要求。
+#[tauri::command]
+pub fn set_ball_expanded(app: AppHandle, expanded: bool) -> Result<(), String> {
+    crate::ballhub::set_expanded(&app, expanded)
+}
+
 #[tauri::command]
 pub fn save_ball_position(
     app: AppHandle,
@@ -87,6 +99,12 @@ pub fn save_ball_position(
     x: i32,
     y: i32,
 ) -> Result<(), String> {
+    // 枢纽态下窗口是按球心重新定位过的，此时的左上角不是「悬浮球的位置」；
+    // 存下去下次启动就会从偏移过的位置冒出来（程序自己挪窗也会触发 onMoved）
+    if crate::ballhub::is_expanded(&app) {
+        log::debug!("忽略枢纽态下的悬浮球位置上报: ({x}, {y})");
+        return Ok(());
+    }
     save_position(&app, state, |s| {
         s.ball_x = Some(x);
         s.ball_y = Some(y);
@@ -186,9 +204,11 @@ pub(crate) fn copy_pin_impl(app: &AppHandle, pin_id: i64) -> Result<(), String> 
     copy_clip_impl(app, clip_id)
 }
 
+/// 删除条目。走后台线程：条目被删时可能连带关掉贴图窗口，
+/// 而贴图窗口自己的「✕」也会调到这条路径（在自己回调栈里销毁自己同样会卡）。
 #[tauri::command]
-pub fn delete_clip(app: AppHandle, id: i64) -> Result<(), String> {
-    delete_clip_impl(&app, id)
+pub async fn delete_clip(app: AppHandle, id: i64) -> Result<(), String> {
+    crate::run_off_main(app, move |app| delete_clip_impl(app, id)).await
 }
 
 pub(crate) fn delete_clip_impl(app: &AppHandle, id: i64) -> Result<(), String> {
@@ -197,14 +217,22 @@ pub(crate) fn delete_clip_impl(app: &AppHandle, id: i64) -> Result<(), String> {
     for pin_id in pin_ids {
         pins::close_pin_window(app, pin_id);
     }
+    // 正在看的就是这条 → 窗口也关掉
+    if viewer::shown_clip(app) == Some(id) {
+        viewer::close_viewer(app);
+    }
     let _ = app.emit("pins:changed", ());
     let _ = app.emit("clips:changed", ());
     Ok(())
 }
 
 #[tauri::command]
-pub fn clear_clips(app: AppHandle, kind: Option<String>) -> Result<usize, String> {
-    let kind = kind.as_deref().and_then(ClipKind::parse);
+pub async fn clear_clips(app: AppHandle, kind: Option<String>) -> Result<usize, String> {
+    crate::run_off_main(app, move |app| clear_clips_impl(app, kind.as_deref())).await
+}
+
+fn clear_clips_impl(app: &AppHandle, kind: Option<&str>) -> Result<usize, String> {
+    let kind = kind.and_then(ClipKind::parse);
     let removed = {
         let storage = app.state::<Storage>();
         storage.clear(kind)?
@@ -216,13 +244,20 @@ pub fn clear_clips(app: AppHandle, kind: Option<String>) -> Result<usize, String
             Ok(pins_left) => {
                 let alive: std::collections::HashSet<i64> =
                     pins_left.iter().map(|p| p.id).collect();
-                for pin_id in known_pin_windows(&app) {
+                for pin_id in known_pin_windows(app) {
                     if !alive.contains(&pin_id) {
-                        pins::close_pin_window(&app, pin_id);
+                        pins::close_pin_window(app, pin_id);
                     }
                 }
             }
             Err(err) => log::warn!("读取贴图失败: {err}"),
+        }
+
+        // 查看窗口同理：正在看的那条没了就别留着空窗口
+        if let Some(shown) = viewer::shown_clip(app) {
+            if storage.get(shown).is_err() {
+                viewer::close_viewer(app);
+            }
         }
     }
 
@@ -234,6 +269,37 @@ pub fn clear_clips(app: AppHandle, kind: Option<String>) -> Result<usize, String
 #[tauri::command]
 pub fn show_clip_menu(app: AppHandle, id: i64) -> Result<(), String> {
     menu::show_clip_menu(&app, id)
+}
+
+// ------------------------------------------------------------ 查看完整内容
+
+/// 打开某条历史的完整内容（面板里只有 120 字预览 / 320px 缩略图）。
+///
+/// 与截图 / 贴图同理：这个命令要建窗口，必须离开 WebView2 回调栈（wry#583）。
+#[tauri::command]
+pub async fn open_viewer(app: AppHandle, id: i64) -> Result<(), String> {
+    crate::run_off_main(app, move |app| open_viewer_impl(app, id)).await
+}
+
+/// 关闭查看窗口（Esc / 关闭按钮）。它会销毁自己的 webview，也要离开回调栈。
+#[tauri::command]
+pub async fn close_viewer(app: AppHandle) -> Result<(), String> {
+    crate::run_off_main(app, |app| {
+        viewer::close_viewer(app);
+        Ok(())
+    })
+    .await
+}
+
+/// 查看窗口当前显示的条目 id（前端挂载后与收到 `viewer:show` 时都来问它）
+#[tauri::command]
+pub fn viewer_clip(app: AppHandle) -> Option<i64> {
+    viewer::shown_clip(&app)
+}
+
+pub(crate) fn open_viewer_impl(app: &AppHandle, clip_id: i64) -> Result<(), String> {
+    // 面板不收起：查看窗口就停在它旁边，方便一条条往下翻
+    viewer::open_viewer(app, clip_id)
 }
 
 fn known_pin_windows(app: &AppHandle) -> Vec<i64> {
@@ -276,9 +342,12 @@ fn write_to_clipboard(app: &AppHandle, clip: &Clip) -> Result<(), String> {
 
 // ---------------------------------------------------------------- 贴图
 
+/// 贴到桌面。
+///
+/// 与 `start_region_capture` 同理：这个命令要建贴图窗口，必须离开 WebView2 回调栈。
 #[tauri::command]
-pub fn create_pin(app: AppHandle, clip_id: i64) -> Result<Pin, String> {
-    create_pin_impl(&app, clip_id)
+pub async fn create_pin(app: AppHandle, clip_id: i64) -> Result<Pin, String> {
+    crate::run_off_main(app, move |app| create_pin_impl(app, clip_id)).await
 }
 
 pub(crate) fn create_pin_impl(app: &AppHandle, clip_id: i64) -> Result<Pin, String> {
@@ -311,9 +380,10 @@ pub fn get_pin(storage: State<'_, Storage>, id: i64) -> Result<Pin, String> {
     storage.get_pin(id)
 }
 
+/// 关闭贴图：要从贴图窗口自己的「✕」调用，所以同样离开回调栈。
 #[tauri::command]
-pub fn delete_pin(app: AppHandle, id: i64) -> Result<(), String> {
-    delete_pin_impl(&app, id)
+pub async fn delete_pin(app: AppHandle, id: i64) -> Result<(), String> {
+    crate::run_off_main(app, move |app| delete_pin_impl(app, id)).await
 }
 
 pub(crate) fn delete_pin_impl(app: &AppHandle, id: i64) -> Result<(), String> {
@@ -357,12 +427,18 @@ pub fn show_pin_menu(app: AppHandle, id: i64) -> Result<(), String> {
 
 // ---------------------------------------------------------- 截图（转发）
 
+/// 区域截图。
+///
+/// 必须 `async`：这个命令会建 overlay 窗口，而同步命令跑在 WebView2 的回调栈上，
+/// 在那里建 webview 会在 Windows 上死锁（wry#583）—— 症状是 overlay 只建出个空壳、
+/// 命令永不返回，而悬浮球与面板已经被藏起来，整个应用「消失」且再也点不到。
+/// `run_off_main` 把它挪到后台线程，IPC 回调当场返回。
 #[tauri::command]
-pub fn start_region_capture(app: AppHandle) -> Result<(), String> {
-    capture::start_region_capture(&app)
+pub async fn start_region_capture(app: AppHandle) -> Result<(), String> {
+    crate::run_off_main(app, |app| capture::start_region_capture(app)).await
 }
 
 #[tauri::command]
-pub fn capture_fullscreen(app: AppHandle) -> Result<(), String> {
-    capture::capture_fullscreen(&app)
+pub async fn capture_fullscreen(app: AppHandle) -> Result<(), String> {
+    crate::run_off_main(app, |app| capture::capture_fullscreen(app)).await
 }

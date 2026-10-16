@@ -30,7 +30,33 @@ export default function PanelApp() {
   const [dir, setDir] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 每分鐘刷新一次，让「N 分钟前」跟着走 */
+  const [now, setNow] = useState(() => Date.now());
+  /** 正在等第二次点击确认删除的条目 id */
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // 确认删除的状态 3 秒后自动撤销，别一直挂在那
+  useEffect(() => {
+    if (pendingDelete === null) return;
+    const timer = window.setTimeout(() => setPendingDelete(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [pendingDelete]);
+
+  /** 删除要点两次：第一次只是把按钮变成「确认删除」 */
+  const handleDelete = (clip: Clip) => {
+    if (pendingDelete !== clip.id) {
+      setPendingDelete(clip.id);
+      return;
+    }
+    setPendingDelete(null);
+    void api.deleteClip(clip.id);
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -86,6 +112,24 @@ export default function PanelApp() {
     };
   }, [refresh]);
 
+  // 拖动后回写位置（和悬浮球同款节流），下次唤起还记得停在哪
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let timer: number | undefined;
+
+    const unlisten = win.onMoved(({ payload }) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        void api.savePanelPosition(Math.round(payload.x), Math.round(payload.y));
+      }, 400);
+    });
+
+    return () => {
+      window.clearTimeout(timer);
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
+
   // 键盘导航
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -101,8 +145,11 @@ export default function PanelApp() {
         e.preventDefault();
         setActive((i) => Math.max(i - 1, 0));
       } else if (e.key === "Enter") {
+        // Enter = 看完整内容（和单击一致）；Ctrl+Enter = 复制
         const clip = clips[active];
-        if (clip) void api.copyClip(clip.id);
+        if (!clip) return;
+        if (e.ctrlKey) void api.copyClip(clip.id);
+        else void api.openViewer(clip.id);
       }
     };
 
@@ -117,16 +164,34 @@ export default function PanelApp() {
       ?.scrollIntoView({ block: "nearest" });
   }, [active, clips]);
 
+  // 截图按钮：失败时窗口多半已经被藏起来了，把面板叫回来并把原因摆出来，
+  // 否则用户看到的就是「点一下应用没了」。
+  const runCapture = async (action: () => Promise<void>) => {
+    try {
+      setError(null);
+      await action();
+    } catch (err) {
+      setError(`截图失败：${String(err)}`);
+      void api.showPanel();
+    }
+  };
+
   return (
     <div className="panel">
-      <header className="panel-header" data-tauri-drag-region>
+      {/* deep：标题文字上也能拖；按钮是 clickable，会自己挡掉拖拽。
+          双击不去最大化（面板是固定尺寸的，且双击容易被当成拖拽） */}
+      <header
+        className="panel-header"
+        data-tauri-drag-region="deep"
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
         <span className="panel-title">PPClip</span>
         <div className="panel-actions">
           <button
             type="button"
             className="icon-button"
             title="区域截图"
-            onClick={() => void api.startRegionCapture()}
+            onClick={() => void runCapture(api.startRegionCapture)}
           >
             截
           </button>
@@ -134,7 +199,7 @@ export default function PanelApp() {
             type="button"
             className="icon-button"
             title="全屏截图"
-            onClick={() => void api.captureFullscreen()}
+            onClick={() => void runCapture(api.captureFullscreen)}
           >
             全
           </button>
@@ -191,7 +256,11 @@ export default function PanelApp() {
               clip={clip}
               dataDir={dir}
               active={index === active}
-              onClick={(item) => void api.copyClip(item.id)}
+              now={now}
+              confirming={pendingDelete === clip.id}
+              onClick={(item) => void api.openViewer(item.id)}
+              onCopy={(item) => void api.copyClip(item.id)}
+              onDelete={handleDelete}
               onContextMenu={(item) => void api.showClipMenu(item.id)}
             />
           ))

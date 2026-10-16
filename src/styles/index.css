@@ -46,7 +46,10 @@ html[data-window^="pin-"] #root {
 
 html[data-window="main"],
 html[data-window="main"] body,
-html[data-window="main"] #root {
+html[data-window="main"] #root,
+html[data-window^="view-"],
+html[data-window^="view-"] body,
+html[data-window^="view-"] #root {
   background: var(--bg-panel);
   color: var(--text);
   overflow: hidden;
@@ -61,17 +64,78 @@ html[data-window="overlay"] #root {
   user-select: none;
 }
 
-/* ---------- 悬浮球 ---------- */
+/* ---------- 悬浮球（收起态 / 悬停枢纽态） ----------
+ *
+ * 收起态：52px 的球，窗口跟球一样大（Windows 上还会多出两侧透明区）。
+ * 枢纽态：鼠标停住 0.3 秒后 Rust 把窗口按「球心不动」撑成 240×240，这里露出
+ * 中心球 + 四个环绕按钮；鼠标一离开再缩回去（`ball-root.is-open` 是开关）。
+ */
 
 .ball-root {
+  position: relative;
   width: 100%;
   height: 100%;
-  display: grid;
-  place-items: center;
+  overflow: hidden;
   background: transparent;
+  user-select: none;
 }
 
+/* 以球心为圆心的方框画布。绝对定位 + translate(-50%,-50%)：窗口比画布小的时候
+   （收起态只有 56 高）也必须居中溢出，不能靠 grid/flex 的「安全对齐」——
+   那会把球推偏，撑窗时看着就像球跳了一下。 */
+.ball-hub {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 216px;
+  height: 216px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* 枢纽态的底面光：让四颗按钮不像浮在空中 */
+.ball-halo {
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 46%,
+    rgba(34, 197, 94, 0.18) 0%,
+    rgba(15, 23, 42, 0) 62%
+  );
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+/* 虚线轨道：四个按钮的圆心都落在这条圆上（半径 84） */
+.ball-orbit {
+  position: absolute;
+  inset: 24px;
+  border: 1px dashed rgba(148, 163, 184, 0.3);
+  border-radius: 50%;
+  opacity: 0;
+  transform: scale(0.72);
+  transition:
+    opacity 160ms ease,
+    transform 240ms cubic-bezier(0.22, 0.9, 0.3, 1.15);
+}
+
+.ball-root.is-open .ball-halo {
+  opacity: 1;
+}
+
+.ball-root.is-open .ball-orbit {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* ---------- 中心球 ---------- */
+
 .ball {
+  position: relative;
+  z-index: 2;
   width: 52px;
   height: 52px;
   padding: 0;
@@ -83,13 +147,17 @@ html[data-window="overlay"] #root {
   font-weight: 700;
   letter-spacing: 0.5px;
   cursor: grab;
-  user-select: none;
+  pointer-events: auto;
   box-shadow:
     0 0 0 1px rgba(15, 23, 42, 0.35),
     0 6px 16px rgba(0, 0, 0, 0.45);
   transition:
-    transform 120ms ease,
-    box-shadow 120ms ease;
+    width 200ms cubic-bezier(0.22, 0.9, 0.3, 1.15),
+    height 200ms cubic-bezier(0.22, 0.9, 0.3, 1.15),
+    border-color 200ms ease,
+    background 200ms ease,
+    box-shadow 200ms ease,
+    transform 120ms ease;
 }
 
 .ball:hover {
@@ -104,8 +172,151 @@ html[data-window="overlay"] #root {
   transform: scale(0.97);
 }
 
+/* 展开后变成一块玻璃质感的圆盘：光环 + 剪贴板图标 + PPCLIP 字样。
+   直径放到 112：四个卫星的内缘（84-21）就在旁边，和设计稿那种「几乎挨着」的密度一致 */
+.ball-root.is-open .ball {
+  width: 112px;
+  height: 112px;
+  border-color: rgba(52, 211, 153, 0.6);
+  background:
+    radial-gradient(circle at 50% 36%, rgba(34, 197, 94, 0.26) 0%, rgba(15, 23, 42, 0.92) 70%),
+    var(--bg-panel);
+  box-shadow:
+    0 0 0 1px rgba(34, 197, 94, 0.28),
+    0 0 26px rgba(34, 197, 94, 0.32),
+    inset 0 0 22px rgba(34, 197, 94, 0.12);
+}
+
+.ball-root.is-open .ball:hover {
+  transform: scale(1.04);
+}
+
+.ball-root.is-open .ball:active {
+  transform: scale(0.97);
+}
+
 .ball-glyph {
   pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.ball-root.is-open .ball-glyph {
+  opacity: 0;
+}
+
+/* 展开后球里那层「图标 + 名字」：和收起态的 PP 交叉淡入淡出 */
+.ball-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #a7f3d0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease 60ms;
+}
+
+.ball-root.is-open .ball-face {
+  opacity: 1;
+}
+
+.ball-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.6px;
+  color: rgba(226, 232, 240, 0.82);
+}
+
+/* ---------- 四个环绕按钮 ---------- */
+
+.ball-sat {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin: -21px 0 0 -21px;
+  padding: 0;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 30%, rgba(30, 41, 59, 0.96), rgba(11, 17, 32, 0.92));
+  color: #cbd5e1;
+  cursor: pointer;
+  opacity: 0;
+  /* 收起时缩回球心里；--sat-x/--sat-y 是各自的方向（半径 84） */
+  transform: translate(0, 0) scale(0.35);
+  pointer-events: none;
+  transition:
+    transform 200ms cubic-bezier(0.22, 0.9, 0.3, 1.15),
+    opacity 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.ball-sat-up {
+  --sat-x: 0px;
+  --sat-y: -84px;
+  --sat-delay: 20ms;
+}
+
+.ball-sat-right {
+  --sat-x: 84px;
+  --sat-y: 0px;
+  --sat-delay: 55ms;
+}
+
+.ball-sat-down {
+  --sat-x: 0px;
+  --sat-y: 84px;
+  --sat-delay: 90ms;
+}
+
+.ball-sat-left {
+  --sat-x: -84px;
+  --sat-y: 0px;
+  --sat-delay: 125ms;
+}
+
+.ball-root.is-open .ball-sat {
+  opacity: 1;
+  transform: translate(var(--sat-x), var(--sat-y)) scale(1);
+  pointer-events: auto;
+  /* 一个个弹出来，别四颗一起蹦。关键帧只做「弹出」，悬停反馈仍走 transition */
+  animation: ball-sat-pop 260ms cubic-bezier(0.22, 0.9, 0.3, 1.25) backwards;
+  animation-delay: var(--sat-delay);
+}
+
+.ball-root.is-open .ball-sat:hover {
+  color: #d1fae5;
+  border-color: rgba(34, 197, 94, 0.7);
+  box-shadow: 0 0 18px rgba(34, 197, 94, 0.35);
+  transform: translate(var(--sat-x), var(--sat-y)) scale(1.1);
+}
+
+.ball-root.is-open .ball-sat:active {
+  transform: translate(var(--sat-x), var(--sat-y)) scale(0.94);
+}
+
+.ball-sat svg {
+  pointer-events: none;
+}
+
+@keyframes ball-sat-pop {
+  from {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.3);
+  }
+  to {
+    opacity: 1;
+    transform: translate(var(--sat-x), var(--sat-y)) scale(1);
+  }
 }
 
 /* ---------- 历史面板 ---------- */
@@ -238,6 +449,157 @@ html[data-window="overlay"] #root {
   background: var(--bg-active);
 }
 
+.clip-row:focus-visible {
+  outline: 1px solid var(--accent-dim);
+  outline-offset: -1px;
+}
+
+/* 预览 + 下面那行时间 */
+.clip-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.clip-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+/* 右侧动作按钮：图标都用 CSS 画，不依赖图标字体 */
+.clip-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.clip-action {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0.75;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease;
+}
+
+.clip-row:hover .clip-action,
+.clip-action:focus-visible {
+  opacity: 1;
+}
+
+.clip-action:hover {
+  background: var(--bg-panel);
+  color: var(--accent);
+}
+
+.clip-action:active {
+  transform: translateY(1px);
+}
+
+/* 删除：平时低调，hover 变红；点过一次变成「确认删除」横幅 */
+.clip-action--danger:hover {
+  color: var(--danger);
+}
+
+.clip-action--danger.is-confirming {
+  width: auto;
+  padding: 0 8px;
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+  opacity: 1;
+}
+
+.clip-del-confirm {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 复制图标：两个圆角方块叠出「两张纸」 */
+.clip-copy-glyph {
+  position: relative;
+  width: 13px;
+  height: 13px;
+}
+
+.clip-copy-glyph::before,
+.clip-copy-glyph::after {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+.clip-copy-glyph::before {
+  left: 0;
+  top: 0;
+}
+
+/* 后面那张「纸」用行底色填掉重叠处，看起来才是两张纸 */
+.clip-copy-glyph::after {
+  right: 0;
+  bottom: 0;
+  background: var(--bg-elevated);
+}
+
+.clip-row:hover .clip-copy-glyph::after {
+  background: var(--bg-hover);
+}
+
+.clip-row.is-active .clip-copy-glyph::after {
+  background: var(--bg-active);
+}
+
+.clip-action:hover .clip-copy-glyph::after {
+  background: var(--bg-panel);
+}
+
+/* 删除图标：盖子 + 桶身 */
+.clip-del-glyph {
+  position: relative;
+  width: 13px;
+  height: 13px;
+}
+
+.clip-del-glyph::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 2px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.clip-del-glyph::after {
+  content: "";
+  position: absolute;
+  left: 1.5px;
+  right: 1.5px;
+  top: 4.5px;
+  bottom: 0.5px;
+  border: 1.5px solid currentColor;
+  border-top: none;
+  border-radius: 0 0 2px 2px;
+}
+
 .clip-kind {
   flex: 0 0 auto;
   width: 20px;
@@ -274,8 +636,8 @@ html[data-window="overlay"] #root {
 }
 
 .clip-thumb img {
-  height: 34px;
-  max-width: 90px;
+  height: 30px;
+  max-width: 84px;
   object-fit: contain;
   border-radius: 4px;
   background: #0b1220;
@@ -288,11 +650,12 @@ html[data-window="overlay"] #root {
 
 .clip-badge {
   flex: 0 0 auto;
-  padding: 1px 5px;
+  padding: 0 5px;
   border-radius: 4px;
   background: rgba(34, 197, 94, 0.16);
   color: var(--accent);
   font-size: 10px;
+  line-height: 15px;
 }
 
 .panel-footer {
@@ -498,6 +861,43 @@ html[data-window="overlay"] #root {
   pointer-events: none;
 }
 
+/* 选区确定 / 取消 */
+.overlay-actions {
+  position: absolute;
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.88);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+}
+
+.overlay-btn {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.overlay-btn:hover {
+  background: var(--bg-hover);
+}
+
+.overlay-btn--primary {
+  border-color: rgba(34, 197, 94, 0.6);
+  background: rgba(34, 197, 94, 0.16);
+  color: #bbf7d0;
+}
+
+.overlay-btn--primary:hover {
+  background: rgba(34, 197, 94, 0.3);
+}
+
 /* ---------- 桌面贴图 ---------- */
 
 .pin {
@@ -559,4 +959,125 @@ html[data-window="overlay"] #root {
 .unknown-window {
   padding: 12px;
   color: var(--danger);
+}
+
+/* ---------- 完整内容查看窗口 ---------- */
+
+.viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  user-select: none;
+}
+
+.viewer-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--text-dim);
+}
+
+.viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.viewer-toggle {
+  flex: 0 0 auto;
+  width: auto;
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.viewer-body {
+  flex: 1 1 auto;
+  /* flex 子项默认 min-height:auto，不加这行长内容会把容器顶出窗口而不是滚动 */
+  min-height: 0;
+  overflow: auto;
+  background: #0b1220;
+  outline: none;
+}
+
+.viewer-body::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.viewer-body::-webkit-scrollbar-thumb {
+  border: 2px solid #0b1220;
+  border-radius: 6px;
+  background: #2b3a51;
+}
+
+.viewer-body::-webkit-scrollbar-thumb:hover {
+  background: #3b4d69;
+}
+
+.viewer-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 图片：is-fit 时缩进窗口，否则按原始像素并可滚动 */
+.viewer-body.is-fit {
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.viewer-image {
+  display: block;
+  -webkit-user-drag: none;
+}
+
+.viewer-body.is-fit .viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.viewer-text {
+  margin: 0;
+  padding: 12px;
+  color: var(--text);
+  font-family: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.viewer-error {
+  margin: 0;
+  padding: 12px;
+  color: #fca5a5;
+}
+
+.viewer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-faint);
+  font-size: 11px;
 }

@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import type { AppSettings, Clip, ClipStats, KindFilter, Pin } from "./types";
@@ -21,6 +22,12 @@ export const api = {
   hidePanel: () => invoke<void>("hide_panel"),
   hideBall: () => invoke<void>("hide_ball"),
   showBall: () => invoke<void>("show_ball"),
+  /** 悬停枢纽态：Rust 按「球心不动」撑大 / 还原悬浮球窗口（见 src-tauri/src/ballhub.rs） */
+  setBallExpanded: (expanded: boolean) =>
+    invoke<void>("set_ball_expanded", { expanded }),
+  /** 订阅枢纽态变化：Rust 是窗口尺寸的唯一真相，前端只同步 CSS */
+  onBallHub: (handler: (expanded: boolean) => void) =>
+    listen<boolean>("ball:hub", (event) => handler(event.payload)),
   saveBallPosition: (x: number, y: number) =>
     invoke<void>("save_ball_position", { x, y }),
   savePanelPosition: (x: number, y: number) =>
@@ -43,6 +50,11 @@ export const api = {
   clearClips: (kind: KindFilter) =>
     invoke<number>("clear_clips", { kind: kind === "all" ? null : kind }),
   showClipMenu: (id: number) => invoke<void>("show_clip_menu", { id }),
+
+  // 查看完整内容（全文 / 原图，单窗口跟着当前条目换内容）
+  openViewer: (id: number) => invoke<void>("open_viewer", { id }),
+  closeViewer: () => invoke<void>("close_viewer"),
+  viewerClip: () => invoke<number | null>("viewer_clip"),
 
   // 贴图
   createPin: (clipId: number) => invoke<Pin>("create_pin", { clipId }),

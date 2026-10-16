@@ -5,6 +5,7 @@ import BallApp from "./windows/BallApp";
 import OverlayApp from "./windows/OverlayApp";
 import PanelApp from "./windows/PanelApp";
 import PinApp from "./windows/PinApp";
+import ViewerApp from "./windows/ViewerApp";
 import { windowLabel } from "./api";
 import "./styles/index.css";
 
@@ -20,6 +21,7 @@ const root =
   label === "ball" ? <BallApp />
   : label === "main" ? <PanelApp />
   : label === "overlay" ? <OverlayApp />
+  : label === "viewer" ? <ViewerApp />
   : label.startsWith("pin-") ? <PinApp />
   : <div className="unknown-window">未知窗口：{label}</div>;
 

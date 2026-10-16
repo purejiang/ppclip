@@ -1,4 +1,6 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
@@ -15,20 +17,35 @@ use crate::{DataDir, SettingsState};
 /// 冻结图在数据目录里的相对路径
 const OVERLAY_REL: &str = "cache/overlay.png";
 
-/// 一次截图会话：冻结的整屏图像 + 截图前被藏起来的窗口
+/// overlay 建出来后多久还没显示出来就回滚（前端加载失败时不能让窗口一直藏着）
+const OVERLAY_READY_TIMEOUT_MS: u64 = 10_000;
+
+/// 一次截图会话：冻结的整屏图像 + 截图前被藏起来的窗口 + 会话编号
 pub struct CaptureSession {
     pub image: RgbaImage,
     /// 截图前可见、结束后需要恢复显示的窗口 label
     pub restore: Vec<String>,
+    /// 会话编号：看门狗只对自己那一次会话负责，避免误伤后开的一次
+    pub id: u64,
 }
+
+/// 会话编号发号器
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default)]
 pub struct CaptureState(pub Mutex<Option<CaptureSession>>);
 
 /// 本应用常驻窗口：截图前必须藏起来，否则会被拍进画面
-const PERSISTENT_WINDOWS: [&str; 2] = ["ball", "main"];
+/// （查看窗口是运行时开的，但一直在用，所以放这里）
+const PERSISTENT_WINDOWS: [&str; 3] = ["ball", "main", crate::viewer::VIEWER_LABEL];
 
 /// 开始区域截图：抓冻结图 → 藏自己的窗口 → 起 overlay
+///
+/// **必须在「非 WebView2 回调」的线程上调用**：这里要建 overlay 窗口，而 Windows
+/// 上 WebView2 不允许在自己的回调里建 webview（Tauri 文档里的 wry#583）。同步命令
+/// 与原生菜单回调都在回调栈上，直接调用本函数会让 `build()` 永不返回：overlay 只
+/// 建出个空壳，而悬浮球 / 面板已经在上面被藏起来了 —— 应用就此变成看不见也点不到
+/// 的僵尸（只能杀进程）。命令层请走 `crate::run_off_main`，菜单层见 `menu.rs`。
 pub fn start_region_capture(app: &AppHandle) -> Result<(), String> {
     // 幂等：上一次没结束的话先收干净，避免叠加多个 overlay
     cancel_capture_impl(app);
@@ -58,19 +75,42 @@ pub fn start_region_capture(app: &AppHandle) -> Result<(), String> {
 
     let restore = hide_own_windows(app);
 
-    let session = CaptureSession { image, restore };
+    let session = CaptureSession {
+        image,
+        restore,
+        id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
+    };
+    let session_id = session.id;
     {
         let state = app.state::<CaptureState>();
         let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
         *guard = Some(session);
     }
 
-    // overlay 覆盖该显示器的「物理」范围：用 physical 定位/设尺寸，
-    // 不受缩放比影响（builder 的 inner_size/position 是逻辑单位，不能用）
     if let Some(existing) = app.get_webview_window("overlay") {
         let _ = existing.close();
     }
 
+    if let Err(err) = build_overlay(app, width, height, monitor_x, monitor_y) {
+        // 建窗失败绝不能把悬浮球 / 面板留在隐藏状态：先回滚（恢复窗口、删冻结图）再报错
+        log::error!("创建截图 overlay 失败，已回滚本次截图: {err}");
+        cancel_capture_impl(app);
+        return Err(err);
+    }
+
+    log::info!("区域截图：显示器 {width}×{height} @ ({monitor_x},{monitor_y})");
+    spawn_overlay_watchdog(app.clone(), session_id);
+    Ok(())
+}
+
+/// 建 overlay 窗口并按显示器「物理」范围定位；先不显示，等前端首帧渲染好自己 show
+fn build_overlay(
+    app: &AppHandle,
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
     let overlay = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("index.html".into()))
         .title("PPClip 截图")
         .inner_size(320.0, 240.0)
@@ -84,11 +124,53 @@ pub fn start_region_capture(app: &AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| format!("创建截图窗口失败: {e}"))?;
 
-    let _ = overlay.set_position(PhysicalPosition::new(monitor_x, monitor_y));
-    let _ = overlay.set_size(PhysicalSize::new(width.max(1), height.max(1)));
-
-    log::info!("区域截图：显示器 {width}×{height} @ ({monitor_x},{monitor_y})");
+    // overlay 覆盖该显示器的「物理」范围：用 physical 定位/设尺寸，
+    // 不受缩放比影响（builder 的 inner_size/position 是逻辑单位，不能用）
+    overlay
+        .set_position(PhysicalPosition::new(x, y))
+        .map_err(|e| format!("定位截图窗口失败: {e}"))?;
+    overlay
+        .set_size(PhysicalSize::new(width.max(1), height.max(1)))
+        .map_err(|e| format!("设置截图窗口尺寸失败: {e}"))?;
     Ok(())
+}
+
+/// overlay 一直没显示出来就回滚这次会话。
+///
+/// 建窗成功但前端没跑起来（WebView2 加载失败 / JS 报错 / 图加载不出来）时，
+/// 悬浮球与面板会一直藏在后台，而没有托盘的 v1 就再也回不来了 —— 这是最后一道防线。
+fn spawn_overlay_watchdog(app: AppHandle, session_id: u64) {
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_millis(OVERLAY_READY_TIMEOUT_MS);
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(200));
+            // 会话已结束（选完 / 取消）或已经换成新的一次 → 看门狗退场
+            if session_id_of(&app) != Some(session_id) {
+                return;
+            }
+            if overlay_is_visible(&app) {
+                return;
+            }
+        }
+
+        if session_id_of(&app) == Some(session_id) {
+            log::warn!("overlay {OVERLAY_READY_TIMEOUT_MS}ms 内没有显示，回滚本次截图并恢复窗口");
+            cancel_capture_impl(&app);
+        }
+    });
+}
+
+fn session_id_of(app: &AppHandle) -> Option<u64> {
+    let state = app.try_state::<CaptureState>()?;
+    let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    guard.as_ref().map(|session| session.id)
+}
+
+/// overlay 是否已经显示出来（冒烟测试与看门狗都用它）
+pub fn overlay_is_visible(app: &AppHandle) -> bool {
+    app.get_webview_window("overlay")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false)
 }
 
 /// overlay 前端拿到冻结图并完成首帧渲染后调用：这时才显示窗口，避免白屏闪一下
@@ -118,15 +200,31 @@ pub fn get_overlay_image(app: AppHandle) -> Result<String, String> {
 }
 
 /// 完成区域截图。x/y/w/h 是相对显示器左上角的**物理像素**
+///
+/// 同样走后台线程：`cleanup_overlay` 会销毁 overlay 自己的 webview，而这个命令正是
+/// 从 overlay 的 webview 回调里发出来的，在回调栈上销毁自己一样会卡住。
 #[tauri::command]
-pub fn finish_region_selection(
+pub async fn finish_region_selection(
     app: AppHandle,
     x: i32,
     y: i32,
     w: i32,
     h: i32,
 ) -> Result<(), String> {
-    let session = take_session(&app).ok_or_else(|| "没有进行中的截图".to_string())?;
+    crate::run_off_main(app, move |app| {
+        finish_region_selection_impl(app, x, y, w, h)
+    })
+    .await
+}
+
+fn finish_region_selection_impl(
+    app: &AppHandle,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    let session = take_session(app).ok_or_else(|| "没有进行中的截图".to_string())?;
 
     let image_w = session.image.width() as i32;
     let image_h = session.image.height() as i32;
@@ -136,8 +234,8 @@ pub fn finish_region_selection(
         image::imageops::crop_imm(&session.image, cx as u32, cy as u32, cw as u32, ch as u32)
             .to_image();
 
-    let result = commit_capture(&app, &cropped);
-    cleanup_overlay(&app, &session);
+    let result = commit_capture(app, &cropped);
+    cleanup_overlay(app, &session);
     result.map(|_| ())
 }
 
@@ -159,13 +257,18 @@ pub fn capture_fullscreen(app: &AppHandle) -> Result<(), String> {
     result
 }
 
+/// 取消截图：关 overlay、恢复窗口、删冻结图。幂等。
+///
+/// 与 `finish_region_selection` 同理，也走后台线程（它会销毁 overlay 自己的 webview）。
 #[tauri::command]
-pub fn cancel_capture(app: AppHandle) -> Result<(), String> {
-    cancel_capture_impl(&app);
-    Ok(())
+pub async fn cancel_capture(app: AppHandle) -> Result<(), String> {
+    crate::run_off_main(app, |app| {
+        cancel_capture_impl(app);
+        Ok(())
+    })
+    .await
 }
 
-/// 取消截图：关 overlay、恢复窗口、删冻结图。幂等。
 pub fn cancel_capture_impl(app: &AppHandle) {
     if let Some(session) = take_session(app) {
         cleanup_overlay(app, &session);
@@ -272,9 +375,16 @@ fn cleanup_overlay(app: &AppHandle, session: &CaptureSession) {
 
 /// 藏起本应用所有窗口，返回「原本可见」的 label 列表
 fn hide_own_windows(app: &AppHandle) -> Vec<String> {
+    // 悬浮球的枢纽态要一起收回：窗口藏起来后前端收不到 mouseleave，
+    // 下次显示出来会是个 240×240 的大方框（见 `crate::ballhub`）
+    if let Err(err) = crate::ballhub::set_expanded(app, false) {
+        log::warn!("截图前收回悬浮球枢纽态失败: {err}");
+    }
+
     let mut labels: Vec<String> = PERSISTENT_WINDOWS.iter().map(|s| s.to_string()).collect();
     for label in app.webview_windows().keys() {
-        if label.starts_with("pin-") {
+        // 贴图与查看窗口都是运行时开的，截图时同样不能拍进去
+        if label.starts_with("pin-") || label.starts_with("view-") {
             labels.push(label.clone());
         }
     }

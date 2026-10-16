@@ -11,11 +11,9 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
 
     match parts.as_slice() {
         ["ball", action] => match *action {
-            "capture" => {
-                if let Err(err) = crate::capture::start_region_capture(app) {
-                    log::warn!("区域截图启动失败: {err}");
-                }
-            }
+            "capture" => spawn_detached(app, "区域截图", |app| {
+                crate::capture::start_region_capture(app)
+            }),
             "panel" => crate::show_panel(app),
             "hide" => {
                 if let Some(ball) = app.get_webview_window("ball") {
@@ -31,9 +29,25 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
         ["clip", raw_id, action] => match raw_id.parse::<i64>() {
             Ok(clip_id) => {
                 let result = match *action {
+                    "view" => {
+                        spawn_detached(app, "查看完整内容", move |app| {
+                            commands::open_viewer_impl(app, clip_id)
+                        });
+                        Ok(())
+                    }
                     "copy" => commands::copy_clip_impl(app, clip_id),
-                    "pin" => commands::create_pin_impl(app, clip_id).map(|_| ()),
-                    "delete" => commands::delete_clip_impl(app, clip_id),
+                    "pin" => {
+                        spawn_detached(app, "贴到桌面", move |app| {
+                            commands::create_pin_impl(app, clip_id).map(|_| ())
+                        });
+                        Ok(())
+                    }
+                    "delete" => {
+                        spawn_detached(app, "删除条目", move |app| {
+                            commands::delete_clip_impl(app, clip_id)
+                        });
+                        Ok(())
+                    }
                     other => {
                         log::warn!("未处理的条目菜单项: {other}");
                         Ok(())
@@ -49,7 +63,12 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
             Ok(pin_id) => {
                 let result = match *action {
                     "copy" => commands::copy_pin_impl(app, pin_id),
-                    "close" => commands::delete_pin_impl(app, pin_id),
+                    "close" => {
+                        spawn_detached(app, "关闭贴图", move |app| {
+                            commands::delete_pin_impl(app, pin_id)
+                        });
+                        Ok(())
+                    }
                     "zoom-in" => commands::zoom_pin_impl(app, pin_id, 1).map(|_| ()),
                     "zoom-out" => commands::zoom_pin_impl(app, pin_id, -1).map(|_| ()),
                     other => {
@@ -65,6 +84,25 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
         },
         _ => log::warn!("未处理的菜单项: {id}"),
     }
+}
+
+/// 把「会创建 / 销毁 webview」的菜单动作扔到独立线程。
+///
+/// 菜单回调是在 `TrackPopupMenu` 的模态循环里执行的，而 `popup()` 本身是从
+/// WebView2 的 IPC 回调里调用的 —— 也就是说菜单回调仍处在 WebView2 的回调栈上，
+/// 在那里建 / 关 webview 会死锁（wry#583，详见 `crate::run_off_main`）。
+/// 菜单没有回执通道，出错只能记日志。
+fn spawn_detached(
+    app: &AppHandle,
+    what: &'static str,
+    task: impl FnOnce(&AppHandle) -> Result<(), String> + Send + 'static,
+) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Err(err) = task(&app) {
+            log::warn!("{what}失败: {err}");
+        }
+    });
 }
 
 /// 悬浮球右键菜单
@@ -92,6 +130,9 @@ pub fn show_ball_menu(app: &AppHandle) -> Result<(), String> {
 
 /// 历史条目右键菜单
 pub fn show_clip_menu(app: &AppHandle, clip_id: i64) -> Result<(), String> {
+    let view = MenuItemBuilder::with_id(format!("clip:{clip_id}:view"), "查看完整内容")
+        .build(app)
+        .map_err(|e| e.to_string())?;
     let copy = MenuItemBuilder::with_id(format!("clip:{clip_id}:copy"), "复制")
         .build(app)
         .map_err(|e| e.to_string())?;
@@ -103,7 +144,7 @@ pub fn show_clip_menu(app: &AppHandle, clip_id: i64) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let menu = MenuBuilder::new(app)
-        .items(&[&copy, &pin, &delete])
+        .items(&[&view, &copy, &pin, &delete])
         .build()
         .map_err(|e| e.to_string())?;
 

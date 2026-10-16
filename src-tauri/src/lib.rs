@@ -1,3 +1,4 @@
+pub mod ballhub;
 pub mod capture;
 pub mod clipboard;
 pub mod commands;
@@ -8,6 +9,7 @@ pub mod pins;
 pub mod settings;
 pub mod storage;
 pub mod util;
+pub mod viewer;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -49,6 +51,27 @@ pub fn toggle_panel(app: &tauri::AppHandle) {
             let _ = win.set_focus();
         }
     }
+}
+
+/// 把「会创建 / 销毁窗口」的活儿挪到独立线程执行，并等它跑完。
+///
+/// Windows 上 WebView2 **不允许在自己的回调里创建 widget**：`#[tauri::command]`
+/// 的同步实现、原生菜单回调，都跑在 WebView2 的回调栈上，直接
+/// `WebviewWindowBuilder::build()` 会永远等不到控制器创建完成的回调（死锁）。
+/// Tauri 自己在 `WebviewWindowBuilder` 的文档里把这条列为已知问题（wry#583），
+/// 建议「用 async 命令或独立线程」。
+///
+/// async 命令会被 Tauri 立刻挂到异步运行时上，IPC 回调当场返回，于是窗口创建
+/// 发生在事件循环里而不是回调栈里。注意：这里之所以用 `spawn_blocking` 而不是
+/// `spawn`，是因为截图路径本身是阻塞的（抓屏、写 PNG、写剪贴板）。
+pub(crate) async fn run_off_main<T, F>(app: tauri::AppHandle, task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&tauri::AppHandle) -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || task(&app))
+        .await
+        .map_err(|e| format!("后台任务异常结束: {e}"))?
 }
 
 /// 目录能不能真写：建目录 + 写一个探测文件（只有真写成功才算数）
@@ -141,6 +164,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             log::info!("检测到第二个实例，唤醒已有悬浮球与面板");
+            let _ = ballhub::set_expanded(app, false);
             if let Some(ball) = app.get_webview_window("ball") {
                 let _ = ball.show();
             }
@@ -192,6 +216,8 @@ pub fn run() {
             app.manage(SettingsState(Mutex::new(settings.clone())));
             app.manage(SelfWrite::new());
             app.manage(CaptureState::default());
+            app.manage(viewer::ViewerState::default());
+            app.manage(ballhub::BallHubState::default());
             app.manage(DataDir(data_dir));
 
             // 恢复悬浮球上次位置
@@ -237,6 +263,40 @@ pub fn run() {
                 });
             }
 
+            // 区域截图冒烟测试：只验证「冷冻图 → 藏窗口 → 建 overlay → 前端把 overlay 显示出来」
+            // 这条链路（选区要人来拖），跑完就退出。这条链路曾经因为 wry#583 死锁，
+            // 把悬浮球和面板永久藏在后台 —— 见 `run_off_main`。
+            if std::env::args().any(|arg| arg == "--capture-region") {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                    let code = match capture::start_region_capture(&handle) {
+                        Ok(()) => {
+                            let mut shown = false;
+                            for _ in 0..50 {
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                if capture::overlay_is_visible(&handle) {
+                                    shown = true;
+                                    break;
+                                }
+                            }
+                            if shown {
+                                log::info!("--capture-region 完成：overlay 已显示");
+                                0
+                            } else {
+                                log::error!("--capture-region 失败：overlay 没有显示出来");
+                                1
+                            }
+                        }
+                        Err(err) => {
+                            log::error!("--capture-region 失败: {err}");
+                            1
+                        }
+                    };
+                    handle.exit(code);
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -249,6 +309,7 @@ pub fn run() {
             commands::hide_panel,
             commands::hide_ball,
             commands::show_ball,
+            commands::set_ball_expanded,
             commands::save_ball_position,
             commands::save_panel_position,
             commands::show_ball_menu,
@@ -260,6 +321,9 @@ pub fn run() {
             commands::delete_clip,
             commands::clear_clips,
             commands::show_clip_menu,
+            commands::open_viewer,
+            commands::close_viewer,
+            commands::viewer_clip,
             commands::create_pin,
             commands::list_pins,
             commands::get_pin,

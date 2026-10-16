@@ -60,4 +60,9 @@ export interface UpsertOutcome {
 export type KindFilter = "all" | ClipKind;
 
 /** 本应用用到的窗口标签 */
-export type WindowLabel = "ball" | "main" | "overlay" | `pin-${number}`;
+export type WindowLabel =
+  | "ball"
+  | "main"
+  | "overlay"
+  | "viewer"
+  | `pin-${number}`;
