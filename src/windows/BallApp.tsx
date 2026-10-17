@@ -65,6 +65,13 @@ export default function BallApp() {
   const openTimer = useRef<number | undefined>(undefined);
   /** 「胶囊 → 常规态」这次切换是否还在飞（防止 pointermove 连发重复调用命令） */
   const undocking = useRef(false);
+  /**
+   * 拖动刚结束：松手时鼠标必然还停在球上，`evaluateHover` 会把这一瞬当成
+   * 「想唤出常规态」的悬停，把刚吸上的胶囊立刻打回圆球 —— 贴边永远留不住，
+   * 形态来回切还会让窗口位置跳一下（实测同秒内 tab → orb）。
+   * 所以拖完先屏蔽 tab 的唤出，等鼠标真正离开窗口再恢复感知。
+   */
+  const justDragged = useRef(false);
   /** 鼠标是否还在窗口里：展开是异步的，回来时得再确认一次才点亮 */
   const hovered = useRef(false);
   const [state, setState] = useState<BallState>("orb");
@@ -228,7 +235,7 @@ export default function BallApp() {
   const evaluateHover = (e: React.PointerEvent) => {
     const target = e.target as Element | null;
     if (state === "tab") {
-      if (!target?.closest(".ball-tab") || undocking.current) return;
+      if (!target?.closest(".ball-tab") || undocking.current || justDragged.current) return;
       // 折叠态鼠标一放上去就展开成常规态（稿子 State 01 的 hover 语义）
       undocking.current = true;
       void api
@@ -301,6 +308,10 @@ export default function BallApp() {
       // startDragging 的 Promise 在松手之后才 resolve：这时才让 Rust 按落点定形态
       // （靠边就吸成胶囊）。挂在位置上报上会把刚唤出来的常规态吸回去
       .then(() => api.finishBallDrag())
+      .then(() => {
+        // 吸上胶囊了也别当悬停：手还停在上头，一唤出就白贴了
+        justDragged.current = true;
+      })
       .catch((err) => console.error("结束拖动失败", err));
   };
 
@@ -333,7 +344,11 @@ export default function BallApp() {
       onPointerEnter={evaluateHover}
       onPointerOver={evaluateHover}
       onPointerMove={evaluateHover}
-      onPointerLeave={() => collapseHub()}
+      onPointerLeave={() => {
+        // 鼠标真离开窗口了：恢复悬停感知，下次放上胶囊才唤出常规态
+        justDragged.current = false;
+        collapseHub();
+      }}
     >
       <div className="ball-hub">
         {/* 展开态：200×200 的 HUD 轮盘 */}

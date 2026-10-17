@@ -180,6 +180,13 @@ cd src-tauri && cargo check   # Rust 类型检查
     那个「悬停满 0.3 秒展开」的倒计时不掐掉的话，面板刚露出来轮盘就自己弹回来 ——
     面板是后来的置顶窗，轮盘只会从它的边缘探出来，而且面板是半透明玻璃、撑开的轮盘会直接透出来。
     Rust 侧 `show_panel` / `toggle_panel` 打开面板前也会 `ballhub::set_expanded(false)` 兜底。
+    **例外：拖动刚结束的那一瞬不算悬停**（`BallApp` 的 `justDragged`）。松手时鼠标必然还停在
+    球上，`evaluateHover` 会立刻把这一瞬当成「想唤出常规态」，把刚吸上的胶囊打回圆球 ——
+    贴边永远留不住，而且形态来回切会让窗口位置跳一下（实测日志里同一秒出现
+    `形态 → tab` 紧跟 `形态 → orb`，位置从 (2458,452) 跳到 (2431,461)，用户看到的就是
+    「不自动贴边 + 悬停跳动」）。所以 `finish_ball_drag` 之后置位 `justDragged`，
+    屏蔽 tab 的唤出，直到鼠标真正离开窗口（`onPointerLeave`）才恢复感知；
+    单击不受影响（贴边后点胶囊照样开合面板）。
 14. **样式统一在 `styles/index.css` 的 Glacier 设计系统里**（严格照 stitch 稿）：
     token 与稿子的 Tailwind 名字一一对应，带 `/xx` 透明度的存成 `R G B` 三元组，
     写法和稿子一样：`rgb(var(--surface) / 85%)` == `bg-surface/85`。
