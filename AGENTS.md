@@ -201,9 +201,17 @@ cd src-tauri && cargo check   # Rust 类型检查
     ② **钳制范围按「形状中心」找显示器，不要用 `current_monitor()`**。贴边时窗口（180 宽）
     正跨着屏幕边界，`current_monitor()` 会判到隔壁那块：轮盘被钳到 x=2560（右屏起点），
     鼠标留在左屏 → 立刻 pointerleave → 「展开就收回」。改用 `app.monitor_from_point(形状中心)`。
-    ③ **展开瞬间的 pointerleave 不可信**。轮盘钳进屏幕会让窗口整体重定位 100+ px，
-    WebView2 会误派一次 leave。前端用 `leaveGuardUntil`（400ms）挡掉，期间延迟 260ms
-    复查 `hovered`（`evaluateHover` 在 wheel 态用真实 target 覆盖 hovered）。
+    ③ **收回轮盘不能只信 pointer 事件**。轮盘钳进屏幕会让窗口重定位 100+ px，这时 WebView2 会：
+    派一次**假的 `pointerleave`**（指针没动，之后也**不会补 `pointerover`**，前端无从分辨真假）、
+    并且可能派**假的 `pointerdown`**（`e.buttons` 是真的，挡不住）—— 后者被 `onPointerMove`
+    判成「用户在拖」，直接 `setBallExpanded(false)`，于是「展开 → 收回 → 又展开」一秒一轮地闪
+    （实测日志里 `悬浮球收起原因：dragStart` 就是它）。三条对策：
+    · `onPointerLeave` 后 150ms 问 Rust `ball_cursor_inside`，**确实不在窗口里才收**；
+    · 那条命令必须用 Win32 `GetCursorPos`（本项目直接 FFI，不引 crate）——
+      Tauri 的 `cursor_position()` 实测返回的不是屏幕物理坐标（y 差 200+ px），判断必然错；
+    · `markClosed` 与 `expandHub` 成功时清掉 `pointer.current`，并在展开后 600ms 内不认拖动。
+    排查这类问题最有效的手段是 `ball_trace(reason)` 命令 + info 级几何日志
+    （`悬浮球 → wheel：… 钳制位移 (dx, dy)` / `实测 outer … inner …`），比看现象快得多。
 14. **样式统一在 `styles/index.css` 的 Glacier 设计系统里**（严格照 stitch 稿）：
     token 与稿子的 Tailwind 名字一一对应，带 `/xx` 透明度的存成 `R G B` 三元组，
     写法和稿子一样：`rgb(var(--surface) / 85%)` == `bg-surface/85`。

@@ -75,17 +75,19 @@ export default function BallApp() {
   /** 「胶囊 → 常规态」这次切换是否还在飞（防止 pointermove 连发重复调用命令） */
   const undocking = useRef(false);
   /**
-   * 展开瞬间窗口会整体重定位（贴边时轮盘要钳进屏幕，窗口左移最多 100+ px）。
-   * WebView2 在这种位移后会误派一次 `pointerleave`，而指针其实一直在轮盘上 ——
-   * 不挡掉的话轮盘刚展开就被收回（实测：展开后 1 秒内 → orb）。
-   * 这段时间内的 leave 先记账，等窗口稳定后复查。
-   */
-  const leaveGuardUntil = useRef(0);
-  /**
    * 拖动结束的时刻（`Date.now()`）：这段时间内把悬停当成「松手残留」而不是意图，
    * 否则刚吸上的胶囊会被立刻打回圆球。详见 `POST_DRAG_HOVER_GUARD_MS`。
    */
   const dragEndedAt = useRef(0);
+  /**
+   * 展开后这段时间内不认拖动。
+   *
+   * 轮盘撑开会让窗口重定位，WebView2 随后可能派来一整套**假的** pointerdown/move
+   * （按钮位是真的，`e.buttons` 挡不住），于是 `onPointerMove` 判定「用户在拖」，
+   * 立刻 `setBallExpanded(false)` —— 实测就是「展开即收回、然后又展开」的死循环。
+   * 展开刚发生的这 600ms 里直接无视拖动即可：这段时间用户本来也不会去拖轮盘。
+   */
+  const ignoreDragUntil = useRef(0);
   /** 鼠标是否还在窗口里：展开是异步的，回来时得再确认一次才点亮 */
   const hovered = useRef(false);
   const [state, setState] = useState<BallState>("orb");
@@ -135,6 +137,9 @@ export default function BallApp() {
   /** 收回轮盘：改 CSS 状态，并把可能存在的「聚焦滚动」抹掉 */
   const markClosed = () => {
     setState(formRef.current);
+    // 形态切换会让窗口改尺寸/位置，WebView2 可能派假的 pointerdown —— 把按下状态清掉，
+    // 否则之后任何一次鼠标移动（哪怕只是把光标挪走）都会被判成「用户在拖球」
+    pointer.current = null;
     // 窗口一缩小，画面外那个「曾经被聚焦的卫星按钮」会让浏览器把画布滚过去
     // （overflow:hidden 照样能被程序性滚动），形状中心就对不上窗口中心了 ——
     // 所以顺手 blur + 把滚动位置拉回原点
@@ -215,6 +220,7 @@ export default function BallApp() {
   /** 真正去撑窗：窗口先撑开，再放弹出动画（窗口没撑开时按钮会被裁掉） */
   const expandHub = () => {
     if (open) return;
+    ignoreDragUntil.current = Date.now() + 600;
     void api
       .setBallExpanded(true)
       .then(([dx, dy]) => {
@@ -222,9 +228,9 @@ export default function BallApp() {
         // 用命令带回来的补偿量把球反向偏移：球留在原地，轮盘从旁边滑出来
         const scale = scaleRef.current || 1;
         setWheelShift([-dx / scale, -dy / scale]);
+        // 窗口刚被重定位：把可能残留的按下状态清掉（见 markClosed 的说明）
+        pointer.current = null;
         if (hovered.current) setState("wheel");
-        // 窗口刚被重定位：接下来这一小段里的 pointerleave 不可信（见 leaveGuardUntil）
-        leaveGuardUntil.current = Date.now() + 400;
       })
       .catch((err) => console.error("展开悬浮球失败", err));
   };
@@ -288,6 +294,7 @@ export default function BallApp() {
   /** 收回轮盘；默认延迟一点，让退场动画播完再缩窗 */
   const collapseHub = (immediate = false) => {
     hovered.current = false;
+    void api.ballTrace(`collapseHub(immediate=${immediate})`);
     // 还没到点就走了：倒计时直接作废，不要补展开
     window.clearTimeout(openTimer.current);
     window.clearTimeout(collapseTimer.current);
@@ -304,6 +311,7 @@ export default function BallApp() {
   /** 卫星按钮：先收回轮盘（截图的冻结帧不能把这圈按钮拍进去）再执行动作 */
   const runSatellite = (action: () => Promise<void>) => {
     hovered.current = false;
+    void api.ballTrace("runSatellite");
     window.clearTimeout(openTimer.current);
     window.clearTimeout(collapseTimer.current);
     markClosed();
@@ -320,14 +328,27 @@ export default function BallApp() {
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    // 刚展开：窗口重定位会派假 pointerdown/move，别当成拖动（否则展开即收回）
+    if (Date.now() < ignoreDragUntil.current) {
+      pointer.current = null;
+      return;
+    }
     const pointerState = pointer.current;
-    if (!pointerState || pointerState.dragging) return;
+    if (!pointerState) return;
+    // 左键已经不在了：`startDragging()` 会把 pointerup 吞掉，pointer.current 于是一直留着，
+    // 窗口重定位后 WebView 再派 pointermove，就会被误判成「又开始拖」→ 收起轮盘（实测死循环）
+    if (e.buttons === 0) {
+      pointer.current = null;
+      return;
+    }
+    if (pointerState.dragging) return;
 
     const moved = Math.hypot(e.screenX - pointerState.x, e.screenY - pointerState.y);
     if (moved <= DRAG_THRESHOLD) return;
 
     pointerState.dragging = true;
     hovered.current = false;
+    void api.ballTrace("dragStart");
     // 压着形状拖走时，那个还没到点的「悬停展开」倒计时也得作废，
     // 否则松手后手还停在上头，倒计时一到又自己弹开
     window.clearTimeout(openTimer.current);
@@ -385,17 +406,18 @@ export default function BallApp() {
       onPointerOver={evaluateHover}
       onPointerMove={evaluateHover}
       onPointerLeave={() => {
-        const guard = leaveGuardUntil.current - Date.now();
-        if (guard > 0) {
-          // 窗口刚被重定位，这一下 leave 不可信：等它稳定后复查一次，
-          // 期间指针若又落回轮盘（evaluateHover 会把 hovered 设回 true）就不收回
-          window.clearTimeout(collapseTimer.current);
-          collapseTimer.current = window.setTimeout(() => {
-            if (!hovered.current) collapseHub(true);
-          }, guard + 60) as unknown as number;
-          return;
-        }
-        collapseHub();
+        window.clearTimeout(collapseTimer.current);
+        // 窗口重定位会让 WebView2 派一次假 leave，而且因为指针没动、它之后
+        // 也不会补 pointerover —— 光看事件分不清真假。所以延迟一点去问真实光标：
+        // 确实不在窗口里才收回，否则保持展开（否则就是「展开→收回→又展开」的死循环）
+        collapseTimer.current = window.setTimeout(() => {
+          void api
+            .ballCursorInside()
+            .then((inside) => {
+              if (!inside) collapseHub(true);
+            })
+            .catch(() => collapseHub(true));
+        }, 150);
       }}
     >
       <div className="ball-hub">

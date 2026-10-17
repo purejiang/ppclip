@@ -130,6 +130,69 @@ pub fn set_ball_expanded(app: AppHandle, expanded: bool) -> Result<[i32; 2], Str
     Ok([x, y])
 }
 
+/// 临时诊断：前端把「为什么要收起轮盘」写进日志。
+#[tauri::command]
+pub fn ball_trace(reason: String) {
+    log::info!("悬浮球收起原因：{reason}");
+}
+
+/// 光标此刻是否真的在悬浮球窗口内。
+///
+/// 用来区分「用户真的把鼠标移开了」和「窗口自己重定位造成的假 leave」：
+/// 窗口一改尺寸/位置，Chromium 会派一次 `pointerleave`，但因为指针没动，
+/// **不会再补 `pointerover`** —— 前端光靠事件永远分不清这两种情况
+/// （实测后果：轮盘展开即被收回，鼠标还在球上又展开，一秒一轮地闪）。
+///
+/// 用 Win32 `GetCursorPos` 而不是 Tauri 的 `cursor_position()`：后者实测返回的
+/// 不是屏幕物理坐标（拿到的 y 差了 200+ px），判断必然错。这里直接 FFI 到 user32，
+/// 也就不必为这一个函数引入 windows crate。
+#[tauri::command]
+pub fn ball_cursor_inside(app: AppHandle) -> bool {
+    use tauri::Manager;
+    let Some(win) = app.get_webview_window("ball") else {
+        return false;
+    };
+    let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) else {
+        return false;
+    };
+    let Some((cx, cy)) = cursor_screen_pos() else {
+        // 拿不到光标位置时保持现状（宁可多撑一会儿，也别把轮盘闪掉）
+        return true;
+    };
+    let inside = cx >= pos.x
+        && cx <= pos.x + size.width as i32
+        && cy >= pos.y
+        && cy <= pos.y + size.height as i32;
+    log::info!(
+        "光标判定：cursor=({cx}, {cy}) 窗口=({}, {}) {}×{} → inside={inside}",
+        pos.x,
+        pos.y,
+        size.width,
+        size.height
+    );
+    inside
+}
+
+#[repr(C)]
+struct RawPoint {
+    x: i32,
+    y: i32,
+}
+
+unsafe extern "system" {
+    fn GetCursorPos(lp_point: *mut RawPoint) -> i32;
+}
+
+/// 光标在虚拟屏幕上的物理坐标（多显示器时为全局坐标，与 `outer_position` 同一坐标系）
+fn cursor_screen_pos() -> Option<(i32, i32)> {
+    let mut pt = RawPoint { x: 0, y: 0 };
+    // SAFETY: GetCursorPos 只往我们提供的结构体里写，指针有效
+    if unsafe { GetCursorPos(&mut pt) } == 0 {
+        return None;
+    }
+    Some((pt.x, pt.y))
+}
+
 /// 切「贴边胶囊 ↔ 常规球」。胶囊上 hover / 单击都会走到这里（稿子里的「唤出常规态」），
 /// 形态显式落盘，下次启动就照它还原。
 #[tauri::command]

@@ -34,6 +34,10 @@ export const api = {
   /** 展开 / 收回枢纽态；返回展开时窗口被钳进屏幕的位移（物理像素 `[dx, dy]`，收起恒为 0） */
   setBallExpanded: (expanded: boolean) =>
     invoke<[number, number]>("set_ball_expanded", { expanded }),
+  /** 光标是否真的在悬浮球窗口里（分辨「真移开」和「窗口重定位造成的假 leave」） */
+  ballCursorInside: () => invoke<boolean>("ball_cursor_inside"),
+  /** 临时诊断：把收起轮盘的原因写进 Rust 日志 */
+  ballTrace: (reason: string) => invoke<void>("ball_trace", { reason }),
   /** 切「贴边胶囊 ↔ 常规球」（胶囊上鼠标一放上去 + 单击都走这里） */
   setBallDocked: (docked: boolean) =>
     invoke<void>("set_ball_docked", { docked }),

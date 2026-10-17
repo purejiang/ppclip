@@ -48,8 +48,12 @@ pub const WHEEL_LOGICAL: f64 = 200.0;
 /// ⚠️ 改这里要同步 `src/windows/BallApp.tsx` 的形态阈值（150 / 90）
 /// 与 `ballhub::tests::collapsed_windows_leave_room_for_the_shadow_and_the_badge`。
 pub const SHAPE_PAD_LOGICAL: f64 = 16.0;
-/// 形状中心离屏幕左右边缘多近（逻辑像素）就吸附成胶囊
-const DOCK_MARGIN: f64 = 40.0;
+/// 形状中心离屏幕左右边缘多近（逻辑像素）就吸附成胶囊。
+///
+/// 判定用的是**形状中心**，所以球半径（26）会吃掉一部分：40 实际只相当于
+/// 「球边距屏幕边 14px 内」。实测拖到边缘经常差几像素就判不中，放宽到 60
+/// （球边距边 ≈ 34px）更符合「拖到边就该吸住」的直觉。
+const DOCK_MARGIN: f64 = 60.0;
 
 /// 展开前那一刻的收起态窗口几何（**实测**值）
 #[derive(Clone, Copy)]
