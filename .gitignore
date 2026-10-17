@@ -35,3 +35,6 @@ src-tauri/gen/schemas/
 
 # Backup files
 *.bak
+
+# WorkBuddy 工作区记忆
+.workbuddy/

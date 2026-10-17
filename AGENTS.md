@@ -112,7 +112,10 @@ cd src-tauri && cargo check   # Rust 类型检查
     嵌套 `<button>` 是非法结构），按钮都 `stopPropagation`，避免冒泡成「看详情」；
     第二行 meta 是稿子的两行结构：`n chars / 尺寸 · 大小` 一行、等宽字体时间一行，
     由面板每分钟刷新一次 `now`。单击默认看详情，筛选行右边那颗闪电打开后变成「单击即复制」
-    （`AppSettings::click_to_copy`，真实持久化）。图钉是 toggle：已贴上时按钮常亮，再点取消
+    （`AppSettings::click_to_copy`，真实持久化）。**双击无条件看详情**：闪电把单击占掉之后，
+    双击是鼠标唯一的详情入口（和 Ditto / CopyQ 一致）；普通模式下双击只是重复触发同一个
+    单例窗口，无害。三个图标按钮的 `onDoubleClick` 都要 `stopPropagation`，否则双击按钮
+    会冒泡成「看详情」。图钉是 toggle：已贴上时按钮常亮，再点取消
     （面板 refresh 时顺带 `list_pins` 拿已贴条目）。
     删除是破坏性的（文件 + 库记录一起没），所以**点两次**：第一次只把按钮变成红色「确认删除」，
     3 秒不点自动撤销（`PanelApp` 的 `pendingDelete`）；删除期间条目行还在，方便反悔。

@@ -213,6 +213,15 @@ export default function PanelApp() {
     else void api.openViewer(clip.id);
   };
 
+  /**
+   * 双击一条：无条件看详情。
+   * 「单击即复制」把单击占掉之后，双击是鼠标唯一的详情入口（和 Ditto / CopyQ 一致）；
+   * 普通模式下单击已经看详情，双击只是重复触发同一个单例窗口，无害。
+   */
+  const handleRowDoubleClick = (clip: Clip) => {
+    void api.openViewer(clip.id);
+  };
+
   /** 闪电开关：写进设置，面板与重开都记得 */
   const toggleClickToCopy = async () => {
     const next = !clickToCopy;
@@ -362,6 +371,7 @@ export default function PanelApp() {
                     pinned={pinnedIds.includes(clip.id)}
                     clickToCopy={clickToCopy}
                     onClick={handleRowClick}
+                    onDoubleClick={handleRowDoubleClick}
                     onCopy={(item) => void api.copyClip(item.id)}
                     onPin={(item) => void handlePin(item)}
                     onDelete={handleDelete}
