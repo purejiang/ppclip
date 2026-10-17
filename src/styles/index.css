@@ -443,33 +443,6 @@ html[data-window="overlay"] #root {
   place-items: center;
 }
 
-/* 筛选行右侧的闪电：单击即复制的开关 */
-.bolt-button {
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--on-surface-variant);
-  cursor: pointer;
-  transition:
-    color 150ms ease,
-    background 150ms ease;
-}
-
-.bolt-button:hover {
-  color: var(--primary);
-}
-
-.bolt-button.is-on {
-  color: var(--primary);
-  background: rgb(var(--primary-rgb) / 12%);
-}
-
 .clip-list {
   flex: 1 1 auto;
   min-height: 0;

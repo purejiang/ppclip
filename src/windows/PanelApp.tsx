@@ -6,7 +6,6 @@ import ClipRow from "../components/ClipRow";
 import SettingsPage from "../components/SettingsPage";
 import {
   IconArrowBack,
-  IconBolt,
   IconBroom,
   IconClipboardArrow,
   IconGear,
@@ -52,8 +51,6 @@ export default function PanelApp() {
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
   /** 已经贴在桌面上的条目 id（图钉按钮据此点亮 / 变成取消贴图） */
   const [pinnedIds, setPinnedIds] = useState<number[]>([]);
-  /** 单击直接复制（稿子里筛选行右边那颗闪电）：真实存在设置里 */
-  const [clickToCopy, setClickToCopy] = useState(false);
   /** 历史条目上限，状态条显示 `n / 上限` */
   const [maxItems, setMaxItems] = useState(300);
   const [clearing, setClearing] = useState(false);
@@ -105,7 +102,6 @@ export default function PanelApp() {
       ]);
       setClips(list);
       setStats(nextStats);
-      setClickToCopy(settings.clickToCopy);
       setMaxItems(settings.maxItems);
       setPinnedIds(pins.map((pin) => pin.clipId));
       setActive((index) => Math.min(index, Math.max(0, list.length - 1)));
@@ -207,32 +203,9 @@ export default function PanelApp() {
       ?.scrollIntoView({ block: "nearest" });
   }, [active, clips, settingsOpen]);
 
-  /** 单击一条：默认看详情，开了闪电就直接复制 */
+  /** 单击一条：看完整内容 */
   const handleRowClick = (clip: Clip) => {
-    if (clickToCopy) void api.copyClip(clip.id);
-    else void api.openViewer(clip.id);
-  };
-
-  /**
-   * 双击一条：无条件看详情。
-   * 「单击即复制」把单击占掉之后，双击是鼠标唯一的详情入口（和 Ditto / CopyQ 一致）；
-   * 普通模式下单击已经看详情，双击只是重复触发同一个单例窗口，无害。
-   */
-  const handleRowDoubleClick = (clip: Clip) => {
     void api.openViewer(clip.id);
-  };
-
-  /** 闪电开关：写进设置，面板与重开都记得 */
-  const toggleClickToCopy = async () => {
-    const next = !clickToCopy;
-    setClickToCopy(next);
-    try {
-      const settings = await api.getSettings();
-      await api.updateSettings({ ...settings, clickToCopy: next });
-    } catch (err) {
-      setClickToCopy(!next);
-      setError(`保存设置失败：${String(err)}`);
-    }
   };
 
   // 截图按钮：失败时窗口多半已经被藏起来了，把面板叫回来并把原因摆出来，
@@ -324,34 +297,20 @@ export default function PanelApp() {
                   onChange={(e) => setQuery(e.target.value)}
                 />
               </label>
-              <div className="panel-filters">
-                <div className="filter-pills">
-                  {FILTERS.map((filter) => (
-                    <button
-                      key={filter.key}
-                      type="button"
-                      className={`filter${kind === filter.key ? " is-active" : ""}`}
-                      onClick={() => setKind(filter.key)}
-                    >
-                      {filter.label}
-                    </button>
-                  ))}
+                <div className="panel-filters">
+                  <div className="filter-pills">
+                    {FILTERS.map((filter) => (
+                      <button
+                        key={filter.key}
+                        type="button"
+                        className={`filter${kind === filter.key ? " is-active" : ""}`}
+                        onClick={() => setKind(filter.key)}
+                      >
+                        {filter.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  className={`bolt-button${clickToCopy ? " is-on" : ""}`}
-                  title={
-                    clickToCopy
-                      ? "单击即复制：已开启（点一下改回「单击看详情」）"
-                      : "单击看详情：点一下改成「单击即复制」"
-                  }
-                  aria-label="单击即复制"
-                  aria-pressed={clickToCopy}
-                  onClick={() => void toggleClickToCopy()}
-                >
-                  <IconBolt size={14} />
-                </button>
-              </div>
             </div>
 
             <div className="clip-list">
@@ -369,9 +328,7 @@ export default function PanelApp() {
                     now={now}
                     confirming={pendingDelete === clip.id}
                     pinned={pinnedIds.includes(clip.id)}
-                    clickToCopy={clickToCopy}
                     onClick={handleRowClick}
-                    onDoubleClick={handleRowDoubleClick}
                     onCopy={(item) => void api.copyClip(item.id)}
                     onPin={(item) => void handlePin(item)}
                     onDelete={handleDelete}

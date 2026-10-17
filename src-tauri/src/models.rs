@@ -20,8 +20,6 @@ pub struct AppSettings {
     /// 光看坐标分不出「贴边胶囊」和「刚被唤出来的常规球」，那样鼠标一放上去唤出的常规态
     /// 会被下一次位置上报立刻吸回胶囊
     pub ball_docked: bool,
-    /// 面板里单击条目直接复制（false = 单击看详情，Ctrl+Enter 才是复制）
-    pub click_to_copy: bool,
     /// 面板位置（物理像素，None = 居中显示）
     pub panel_x: Option<i32>,
     pub panel_y: Option<i32>,
@@ -36,7 +34,6 @@ impl Default for AppSettings {
             ball_y: None,
             ball_opacity: 100,
             ball_docked: false,
-            click_to_copy: false,
             panel_x: None,
             panel_y: None,
         }

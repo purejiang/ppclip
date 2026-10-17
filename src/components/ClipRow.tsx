@@ -14,11 +14,7 @@ interface Props {
   confirming: boolean;
   /** 这条已经贴在桌面上了（图钉按钮点亮，再点=取消贴图） */
   pinned: boolean;
-  /** 面板的「单击即复制」开关：只影响提示文案（行为在 `PanelApp` 里） */
-  clickToCopy: boolean;
   onClick: (clip: Clip) => void;
-  /** 双击：无条件看详情。「单击即复制」开启时，这是鼠标唯一的详情入口 */
-  onDoubleClick: (clip: Clip) => void;
   onCopy: (clip: Clip) => void;
   onPin: (clip: Clip) => void;
   onDelete: (clip: Clip) => void;
@@ -80,9 +76,7 @@ function ClipRow({
   now,
   confirming,
   pinned,
-  clickToCopy,
   onClick,
-  onDoubleClick,
   onCopy,
   onPin,
   onDelete,
@@ -101,9 +95,8 @@ function ClipRow({
       role="button"
       tabIndex={0}
       className={`clip-row${active ? " is-active" : ""}`}
-      title={`${clickToCopy ? "单击复制 · 双击查看完整内容" : "单击查看完整内容"} · 右侧按钮复制 / 贴图 / 删除 · 右键更多\n创建：${formatFull(clip.createdAt)}\n最后使用：${formatFull(clip.lastUsedAt)}`}
+      title={`单击查看完整内容 · 右侧按钮复制 / 贴图 / 删除 · 右键更多\n创建：${formatFull(clip.createdAt)}\n最后使用：${formatFull(clip.lastUsedAt)}`}
       onClick={() => onClick(clip)}
-      onDoubleClick={() => onDoubleClick(clip)}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu(clip);
@@ -157,7 +150,6 @@ function ClipRow({
             e.stopPropagation();
             onCopy(clip);
           }}
-          onDoubleClick={(e) => e.stopPropagation()}
         >
           <IconCopy size={14} />
         </button>
@@ -172,7 +164,6 @@ function ClipRow({
             e.stopPropagation();
             onPin(clip);
           }}
-          onDoubleClick={(e) => e.stopPropagation()}
         >
           <IconPin size={14} />
         </button>
@@ -186,7 +177,6 @@ function ClipRow({
             e.stopPropagation();
             onDelete(clip);
           }}
-          onDoubleClick={(e) => e.stopPropagation()}
         >
           {confirming ? (
             <span className="clip-del-confirm">确认删除</span>
