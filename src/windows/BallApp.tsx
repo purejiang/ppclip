@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { api } from "../api";
@@ -30,6 +30,15 @@ const COLLAPSE_DELAY_MS = 160;
  *   150~400ms 这一带（Windows 自己的鼠标悬停时间默认就是 400ms 左右）。
  */
 const HOVER_OPEN_DELAY_MS = 300;
+/**
+ * 拖动结束后这段时间里不算「悬停意图」。
+ *
+ * 松手那一瞬鼠标必然还停在球上，立刻当成悬停就会把刚吸上的胶囊打回圆球 ——
+ * 贴边留不住，形态来回切还会让窗口位置跳一下（实测日志：同一秒 tab 紧跟 orb）。
+ * 但也不能「直到鼠标离开才恢复」：拖完手没动就等于悬停彻底失灵。
+ * 600ms 够看清「已经贴边」，又不至于让想立刻唤出的人等太久。
+ */
+const POST_DRAG_HOVER_GUARD_MS = 600;
 
 /** 三种形态，和 Rust 侧 `ballhub::state_name` 的取值一一对应 */
 type BallState = "tab" | "orb" | "wheel";
@@ -66,15 +75,19 @@ export default function BallApp() {
   /** 「胶囊 → 常规态」这次切换是否还在飞（防止 pointermove 连发重复调用命令） */
   const undocking = useRef(false);
   /**
-   * 拖动刚结束：松手时鼠标必然还停在球上，`evaluateHover` 会把这一瞬当成
-   * 「想唤出常规态」的悬停，把刚吸上的胶囊立刻打回圆球 —— 贴边永远留不住，
-   * 形态来回切还会让窗口位置跳一下（实测同秒内 tab → orb）。
-   * 所以拖完先屏蔽 tab 的唤出，等鼠标真正离开窗口再恢复感知。
+   * 拖动结束的时刻（`Date.now()`）：这段时间内把悬停当成「松手残留」而不是意图，
+   * 否则刚吸上的胶囊会被立刻打回圆球。详见 `POST_DRAG_HOVER_GUARD_MS`。
    */
-  const justDragged = useRef(false);
+  const dragEndedAt = useRef(0);
   /** 鼠标是否还在窗口里：展开是异步的，回来时得再确认一次才点亮 */
   const hovered = useRef(false);
   const [state, setState] = useState<BallState>("orb");
+  /**
+   * 展开时窗口被钳进屏幕的位移（逻辑像素，已取反向）。
+   * 轮盘贴边撑开会把整扇窗推回屏幕内，球在窗口中心就会跟着跳 ——
+   * 这里换成 CSS 变量喂给 `.ball-core`，让球钉在原来的屏幕位置。
+   */
+  const [wheelShift, setWheelShift] = useState<[number, number]>([0, 0]);
   /** 收起态的形态（tab / orb）：收回轮盘时照它还原，免得先闪一下常规球 */
   const formRef = useRef<"tab" | "orb">("orb");
   /** 逻辑像素换算用（窗口事件给的是物理像素） */
@@ -197,7 +210,14 @@ export default function BallApp() {
     if (open) return;
     void api
       .setBallExpanded(true)
-      .then(() => {
+      .then(async () => {
+        // 贴边时轮盘会被钳进屏幕，窗口整体位移，球在窗口中心就跟着跳。
+        // 取回位移量反向补偿：球留在原地，轮盘从旁边滑出来
+        const [dx, dy] = await api
+          .ballWheelShift()
+          .catch(() => [0, 0] as [number, number]);
+        const scale = scaleRef.current || 1;
+        setWheelShift([-dx / scale, -dy / scale]);
         if (hovered.current) setState("wheel");
       })
       .catch((err) => console.error("展开悬浮球失败", err));
@@ -235,7 +255,9 @@ export default function BallApp() {
   const evaluateHover = (e: React.PointerEvent) => {
     const target = e.target as Element | null;
     if (state === "tab") {
-      if (!target?.closest(".ball-tab") || undocking.current || justDragged.current) return;
+      if (!target?.closest(".ball-tab") || undocking.current) return;
+      // 刚松手：这一下悬停是拖动的残留，不是「想唤出常规态」
+      if (Date.now() - dragEndedAt.current < POST_DRAG_HOVER_GUARD_MS) return;
       // 折叠态鼠标一放上去就展开成常规态（稿子 State 01 的 hover 语义）
       undocking.current = true;
       void api
@@ -309,8 +331,8 @@ export default function BallApp() {
       // （靠边就吸成胶囊）。挂在位置上报上会把刚唤出来的常规态吸回去
       .then(() => api.finishBallDrag())
       .then(() => {
-        // 吸上胶囊了也别当悬停：手还停在上头，一唤出就白贴了
-        justDragged.current = true;
+        // 记下松手时刻：接下来这段时间的悬停不算意图（详见 POST_DRAG_HOVER_GUARD_MS）
+        dragEndedAt.current = Date.now();
       })
       .catch((err) => console.error("结束拖动失败", err));
   };
@@ -340,15 +362,17 @@ export default function BallApp() {
   return (
     <div
       className={`ball-root is-${state}`}
-      style={{ opacity: opacity / 100 }}
+      style={
+        {
+          opacity: opacity / 100,
+          "--hub-shift-x": `${wheelShift[0]}px`,
+          "--hub-shift-y": `${wheelShift[1]}px`,
+        } as CSSProperties
+      }
       onPointerEnter={evaluateHover}
       onPointerOver={evaluateHover}
       onPointerMove={evaluateHover}
-      onPointerLeave={() => {
-        // 鼠标真离开窗口了：恢复悬停感知，下次放上胶囊才唤出常规态
-        justDragged.current = false;
-        collapseHub();
-      }}
+      onPointerLeave={() => collapseHub()}
     >
       <div className="ball-hub">
         {/* 展开态：200×200 的 HUD 轮盘 */}

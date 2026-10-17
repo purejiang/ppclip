@@ -33,6 +33,8 @@ export const api = {
   /** 悬停枢纽态：Rust 按「形状中心不动」撑成 HUD 轮盘（见 src-tauri/src/ballhub.rs） */
   setBallExpanded: (expanded: boolean) =>
     invoke<void>("set_ball_expanded", { expanded }),
+  /** 展开时轮盘被钳进屏幕造成的窗口位移（物理像素）；前端用它把中心球画回原位 */
+  ballWheelShift: () => invoke<[number, number]>("ball_wheel_shift"),
   /** 切「贴边胶囊 ↔ 常规球」（胶囊上鼠标一放上去 + 单击都走这里） */
   setBallDocked: (docked: boolean) =>
     invoke<void>("set_ball_docked", { docked }),

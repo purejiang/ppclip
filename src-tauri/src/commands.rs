@@ -123,6 +123,16 @@ pub fn set_ball_expanded(app: AppHandle, expanded: bool) -> Result<(), String> {
     crate::ballhub::set_expanded(&app, expanded)
 }
 
+/// 展开时轮盘为了进屏幕而被钳制的位移（物理像素，`[dx, dy]`）。
+///
+/// 球在窗口中心，窗口一移球就跟着跳 —— 前端按这个值把中心球反向偏移，
+/// 观感就成了「球钉在原地、轮盘从旁边滑出来」。收起态恒为 `[0, 0]`。
+#[tauri::command]
+pub fn ball_wheel_shift(app: AppHandle) -> [i32; 2] {
+    let (x, y) = crate::ballhub::wheel_shift(&app);
+    [x, y]
+}
+
 /// 切「贴边胶囊 ↔ 常规球」。胶囊上 hover / 单击都会走到这里（稿子里的「唤出常规态」），
 /// 形态显式落盘，下次启动就照它还原。
 #[tauri::command]

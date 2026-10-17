@@ -1736,6 +1736,14 @@ input[type="range"].slider::-webkit-slider-thumb {
   cursor: grabbing;
 }
 
+/* 贴边撑开轮盘时，轮盘为了整块进屏幕会把窗口推开，球在窗口中心就跟着跳一下。
+   把中心球按反向位移画回原来的屏幕位置 —— 观感是「球钉在原地、轮盘从旁边展开」。
+   偏移量由 Rust 算好经 CSS 变量注入（命令 `ball_wheel_shift`，单位 CSS px）。
+   球因此不再停在轮盘正中，这是「球不动」必须付的代价。 */
+.ball-root.is-wheel .ball-core {
+  transform: translate(var(--hub-shift-x, 0px), var(--hub-shift-y, 0px));
+}
+
 .ball-core-inner {
   display: flex;
   flex-direction: column;
