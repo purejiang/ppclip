@@ -345,7 +345,6 @@ pub fn run() {
             commands::is_autostart_enabled,
             commands::set_autostart,
             commands::set_ball_expanded,
-            commands::ball_wheel_shift,
             commands::set_ball_docked,
             commands::finish_ball_drag,
             commands::save_ball_position,

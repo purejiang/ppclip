@@ -193,6 +193,17 @@ cd src-tauri && cargo check   # Rust 类型检查
     **别改成「直到鼠标离开窗口才恢复感知」**：拖完手不动就等于悬停彻底失灵
     （试过，反馈是「鼠标放上去没反应」）。600ms 够看清已经贴边，也不至于让人干等。
     单击不受影响（贴边后点胶囊照样开合面板）。
+    **另外三条实测坑（贴边与展开全在这三处翻过车，2026-10-17）**：
+    ① **frame 绝不推算**。`outer − inner`（以及 `size.height − collapsed_inner_h`）在窗口刚创建时
+    会读到脏值（本机算出 56、真实是 0），于是 `outer_h = inner_h + frame` 凭空多出 56，
+    窗口按它定位整体偏上 28px —— 球落到屏幕外甚至隔壁显示器，鼠标点不到、悬停全废。
+    正确顺序：**先 `set_size` → 读实测 `outer_size` → 再定位**（`set_docked` / `set_expanded` 已如此）。
+    ② **钳制范围按「形状中心」找显示器，不要用 `current_monitor()`**。贴边时窗口（180 宽）
+    正跨着屏幕边界，`current_monitor()` 会判到隔壁那块：轮盘被钳到 x=2560（右屏起点），
+    鼠标留在左屏 → 立刻 pointerleave → 「展开就收回」。改用 `app.monitor_from_point(形状中心)`。
+    ③ **展开瞬间的 pointerleave 不可信**。轮盘钳进屏幕会让窗口整体重定位 100+ px，
+    WebView2 会误派一次 leave。前端用 `leaveGuardUntil`（400ms）挡掉，期间延迟 260ms
+    复查 `hovered`（`evaluateHover` 在 wheel 态用真实 target 覆盖 hovered）。
 14. **样式统一在 `styles/index.css` 的 Glacier 设计系统里**（严格照 stitch 稿）：
     token 与稿子的 Tailwind 名字一一对应，带 `/xx` 透明度的存成 `R G B` 三元组，
     写法和稿子一样：`rgb(var(--surface) / 85%)` == `bg-surface/85`。

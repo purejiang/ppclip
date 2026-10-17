@@ -75,6 +75,13 @@ export default function BallApp() {
   /** 「胶囊 → 常规态」这次切换是否还在飞（防止 pointermove 连发重复调用命令） */
   const undocking = useRef(false);
   /**
+   * 展开瞬间窗口会整体重定位（贴边时轮盘要钳进屏幕，窗口左移最多 100+ px）。
+   * WebView2 在这种位移后会误派一次 `pointerleave`，而指针其实一直在轮盘上 ——
+   * 不挡掉的话轮盘刚展开就被收回（实测：展开后 1 秒内 → orb）。
+   * 这段时间内的 leave 先记账，等窗口稳定后复查。
+   */
+  const leaveGuardUntil = useRef(0);
+  /**
    * 拖动结束的时刻（`Date.now()`）：这段时间内把悬停当成「松手残留」而不是意图，
    * 否则刚吸上的胶囊会被立刻打回圆球。详见 `POST_DRAG_HOVER_GUARD_MS`。
    */
@@ -210,15 +217,14 @@ export default function BallApp() {
     if (open) return;
     void api
       .setBallExpanded(true)
-      .then(async () => {
+      .then(([dx, dy]) => {
         // 贴边时轮盘会被钳进屏幕，窗口整体位移，球在窗口中心就跟着跳。
-        // 取回位移量反向补偿：球留在原地，轮盘从旁边滑出来
-        const [dx, dy] = await api
-          .ballWheelShift()
-          .catch(() => [0, 0] as [number, number]);
+        // 用命令带回来的补偿量把球反向偏移：球留在原地，轮盘从旁边滑出来
         const scale = scaleRef.current || 1;
         setWheelShift([-dx / scale, -dy / scale]);
         if (hovered.current) setState("wheel");
+        // 窗口刚被重定位：接下来这一小段里的 pointerleave 不可信（见 leaveGuardUntil）
+        leaveGuardUntil.current = Date.now() + 400;
       })
       .catch((err) => console.error("展开悬浮球失败", err));
   };
@@ -254,6 +260,12 @@ export default function BallApp() {
    */
   const evaluateHover = (e: React.PointerEvent) => {
     const target = e.target as Element | null;
+    if (open) {
+      // 轮盘已展开：指针还在轮盘范围里就算「没离开」。
+      // 展开瞬间窗口会重定位，WebView2 可能误派 pointerleave，这里用真实位置覆盖掉
+      hovered.current = Boolean(target?.closest(".ball-wheel"));
+      return;
+    }
     if (state === "tab") {
       if (!target?.closest(".ball-tab") || undocking.current) return;
       // 刚松手：这一下悬停是拖动的残留，不是「想唤出常规态」
@@ -372,7 +384,19 @@ export default function BallApp() {
       onPointerEnter={evaluateHover}
       onPointerOver={evaluateHover}
       onPointerMove={evaluateHover}
-      onPointerLeave={() => collapseHub()}
+      onPointerLeave={() => {
+        const guard = leaveGuardUntil.current - Date.now();
+        if (guard > 0) {
+          // 窗口刚被重定位，这一下 leave 不可信：等它稳定后复查一次，
+          // 期间指针若又落回轮盘（evaluateHover 会把 hovered 设回 true）就不收回
+          window.clearTimeout(collapseTimer.current);
+          collapseTimer.current = window.setTimeout(() => {
+            if (!hovered.current) collapseHub(true);
+          }, guard + 60) as unknown as number;
+          return;
+        }
+        collapseHub();
+      }}
     >
       <div className="ball-hub">
         {/* 展开态：200×200 的 HUD 轮盘 */}

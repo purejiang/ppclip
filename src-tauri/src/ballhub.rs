@@ -159,47 +159,75 @@ pub fn set_expanded(app: &AppHandle, expanded: bool) -> Result<(), String> {
         .outer_position()
         .map_err(|e| format!("读取悬浮球位置失败: {e}"))?;
 
-    // 边框厚度用高度算：宽度会被 SM_CXMINTRACK 撑（那是窗口矩形的下限，不是边框）
+    // 收起态客户区高度（记录几何与兜底分支都要用）
     let collapsed_inner_h = (collapsed_h_logical(docked) * scale).round().max(1.0) as u32;
-    let frame = size.height.saturating_sub(collapsed_inner_h);
 
-    let (target_size, target_pos, shift) = if expanded {
-        let geom = Collapsed { pos, size, frame };
+    if expanded {
+        // 记录当前（收起）几何。**frame 一律记 0**：本机无边框窗口实测 outer == inner，
+        // 而窗口刚创建时 inner_size 会读到脏值（实测算出 56），照它定位会整体偏上 28px
+        let geom = Collapsed {
+            pos,
+            size,
+            frame: 0,
+        };
         *state.collapsed.lock().unwrap_or_else(|e| e.into_inner()) = Some(geom);
 
         let edge = (WHEEL_LOGICAL * scale).round().max(1.0) as u32;
-        let bounds = monitor_bounds(&win);
-        expand_target(size, pos, frame, edge, bounds)
-    } else {
-        let recorded = *state.collapsed.lock().unwrap_or_else(|e| e.into_inner());
-        match recorded {
-            Some(geom) => {
-                let (size, pos) = collapse_target(geom);
-                (size, pos, (0, 0))
-            }
-            // 没记过（正常流程不会发生）：退回按中心反推，至少别把球留在窗口外
-            None => {
-                let cx = pos.x as f64 + size.width as f64 / 2.0;
-                let cy = pos.y as f64 + size.height as f64 / 2.0;
-                (
-                    PhysicalSize::new(size.width, collapsed_inner_h),
-                    top_left_for_center(cx, cy, size),
-                    (0, 0),
-                )
-            }
+        state.expanded.store(true, Ordering::Relaxed);
+
+        // 先撑尺寸，再按**实测** outer 定位 —— 与 set_docked 同一套做法，不推算 frame
+        win.set_size(PhysicalSize::new(edge, edge))
+            .map_err(|e| format!("调整悬浮球尺寸失败: {e}"))?;
+        let actual = win
+            .outer_size()
+            .map_err(|e| format!("读取悬浮球尺寸失败: {e}"))?;
+
+        let cx = pos.x as f64 + size.width as f64 / 2.0;
+        let cy = pos.y as f64 + size.height as f64 / 2.0;
+        // 钳制范围按**形状中心**所在的那块屏算（见 monitor_bounds 的说明）
+        let bounds = monitor_bounds(app, cx.round() as i32, cy.round() as i32);
+        let (target, shift) = wheel_position(cx, cy, actual, bounds);
+        *state.wheel_shift.lock().unwrap_or_else(|e| e.into_inner()) = shift;
+        win.set_position(target)
+            .map_err(|e| format!("调整悬浮球位置失败: {e}"))?;
+
+        log::info!(
+            "悬浮球 → wheel：{}×{} @({}, {}) → {}×{} @({}, {})，钳制位移 ({}, {})",
+            size.width,
+            size.height,
+            pos.x,
+            pos.y,
+            actual.width,
+            actual.height,
+            target.x,
+            target.y,
+            shift.0,
+            shift.1
+        );
+        return Ok(());
+    }
+
+    // 收回：照撑开那一刻记下的矩形一比一还原（尺寸去掉边框就是客户区）
+    let recorded = *state.collapsed.lock().unwrap_or_else(|e| e.into_inner());
+    let (target_size, target_pos) = match recorded {
+        Some(geom) => collapse_target(geom),
+        // 没记过（正常流程不会发生）：退回按中心反推，至少别把球留在窗口外
+        None => {
+            let cx = pos.x as f64 + size.width as f64 / 2.0;
+            let cy = pos.y as f64 + size.height as f64 / 2.0;
+            (
+                PhysicalSize::new(size.width, collapsed_inner_h),
+                top_left_for_center(cx, cy, size),
+            )
         }
     };
-
-    // 先改尺寸再挪位置：中间那一帧 WebView 还没重排，形状看着还在原处；
-    // 反过来先挪位置会让它在屏幕上先跳一下。
-    state.expanded.store(expanded, Ordering::Relaxed);
-    *state.wheel_shift.lock().unwrap_or_else(|e| e.into_inner()) = shift;
+    state.expanded.store(false, Ordering::Relaxed);
+    *state.wheel_shift.lock().unwrap_or_else(|e| e.into_inner()) = (0, 0);
     win.set_size(target_size)
         .map_err(|e| format!("调整悬浮球尺寸失败: {e}"))?;
     win.set_position(target_pos)
         .map_err(|e| format!("调整悬浮球位置失败: {e}"))?;
-
-    log::debug!(
+    log::info!(
         "悬浮球 → {}：{}×{} @({}, {}) → {}×{} @({}, {})",
         state_name(app),
         size.width,
@@ -251,19 +279,28 @@ pub fn set_docked(app: &AppHandle, docked: bool) -> Result<bool, String> {
     let inner_h = (collapsed_h_logical(docked) * scale).round().max(1.0) as u32;
     let shape_w = (collapsed_w_logical(docked) * scale).round().max(1.0) as i32;
     let shape_h = (collapsed_shape_h_logical(docked) * scale).round().max(1.0) as i32;
-    // 边框厚度照**当前实测**的 outer−inner 算，不按目标形态反推：
-    // 胶囊（64 高）转常规球（52 高）时按 52 反推会凭空多出 12px，位置算歪、球会跳一下
-    let frame = outer.height.saturating_sub(inner.height);
-    let outer_h = inner_h + frame;
-    let (win_w, win_h) = (outer.width as i32, outer.height as i32);
 
-    // 形状中心（= 窗口中心）
+    // 形状中心（= 客户区中心），必须在改尺寸**之前**记下来
     let cx = pos.x as f64 + outer.width as f64 / 2.0;
     let cy = pos.y as f64 + outer.height as f64 / 2.0;
 
+    state.docked.store(docked, Ordering::Relaxed);
+    // 先改尺寸，再读**实测** outer 来定位。
+    // 绝对不能用 `outer − inner` 推算 frame：窗口刚创建时 inner_size 还没稳定
+    // （本机实测算出 56，真实是 0），多出来的 56 会让窗口整体偏上 28px ——
+    // 球于是落到屏幕外甚至隔壁显示器，鼠标点不到，悬停自然也失效。
+    if inner.height != inner_h {
+        win.set_size(PhysicalSize::new(inner.width, inner_h))
+            .map_err(|e| format!("调整悬浮球尺寸失败: {e}"))?;
+    }
+    let actual = win
+        .outer_size()
+        .map_err(|e| format!("读取悬浮球尺寸失败: {e}"))?;
+    let (win_w, outer_h) = (actual.width as i32, actual.height as i32);
+
     let mut x = pos.x;
     let mut y = (cy - outer_h as f64 / 2.0).round() as i32;
-    if let Some((mx, my, mw, mh)) = monitor_bounds(&win) {
+    if let Some((mx, my, mw, mh)) = monitor_bounds(app, cx.round() as i32, cy.round() as i32) {
         // 钳制一律按**形状**算，不按窗口：窗口比形状宽得多（136 vs 16/52），
         // 按窗口钳会把球从鼠标底下推走 60px —— 贴边态转常规态时鼠标就停在形状上，
         // 那一下推走直接让鼠标落在球外面（点不到、也悬停不到）。
@@ -280,28 +317,35 @@ pub fn set_docked(app: &AppHandle, docked: bool) -> Result<bool, String> {
     } else if docked {
         x = cx.round() as i32 - win_w / 2 - (win_w - shape_w) / 2;
     }
-
-    state.docked.store(docked, Ordering::Relaxed);
-    if inner.height != inner_h {
-        win.set_size(PhysicalSize::new(inner.width, inner_h))
-            .map_err(|e| format!("调整悬浮球尺寸失败: {e}"))?;
-    }
-    if x != pos.x || y != pos.y || outer_h != outer.height {
+    if x != pos.x || y != pos.y {
         win.set_position(PhysicalPosition::new(x, y))
             .map_err(|e| format!("调整悬浮球位置失败: {e}"))?;
     }
     log::info!(
         "悬浮球形态 → {}：{}×{} @({}, {}) → {}×{} @({}, {})",
         state_name(app),
-        win_w,
-        win_h,
+        outer.width,
+        outer.height,
         pos.x,
         pos.y,
-        outer.width,
+        actual.width,
         outer_h,
         x,
         y
     );
+    // 实测值：`frame` 是猜的（outer−inner），一旦 Windows 给了非零边框，
+    // 前端按窗口高度认形态就会认错（182/1.5=121 会被当成 tab 而不是 orb）
+    if let (Ok(ao), Ok(ai)) = (win.outer_size(), win.inner_size()) {
+        log::info!(
+            "  实测 outer {}×{} inner {}×{}，前端应判 {}（logical h = {:.1}）",
+            ao.width,
+            ao.height,
+            ai.width,
+            ai.height,
+            state_name(app),
+            ai.height as f64 / scale
+        );
+    }
     Ok(state.docked.load(Ordering::Relaxed))
 }
 
@@ -331,14 +375,17 @@ pub fn dock(app: &AppHandle) -> Result<bool, String> {
     let pos = win
         .outer_position()
         .map_err(|e| format!("读取悬浮球位置失败: {e}"))?;
-    let Some((mx, _my, mw, _mh)) = monitor_bounds(&win) else {
-        return Ok(is_docked(app));
-    };
-
     // 判定用**形状**中心离边缘的距离：窗口中心会因为窗口被撑宽而偏（136 宽里形状只占 52）
     let shape_w = (collapsed_w_logical(is_docked(app)) * scale).round().max(1.0) as i32;
     let shape_left = pos.x + (size.width as i32 - shape_w) / 2;
     let shape_center = shape_left + shape_w / 2;
+    let shape_center_y = pos.y + size.height as i32 / 2;
+
+    // 按形状中心找显示器：此刻窗口可能正跨着屏幕边界，`current_monitor` 会判到隔壁屏
+    let Some((mx, _my, mw, _mh)) = monitor_bounds(app, shape_center, shape_center_y) else {
+        return Ok(is_docked(app));
+    };
+
     let margin = (DOCK_MARGIN * scale).round() as i32;
     let near_left = shape_center - mx <= margin;
     let near_right = (mx + mw) - shape_center <= margin;
@@ -349,9 +396,14 @@ pub fn dock(app: &AppHandle) -> Result<bool, String> {
     set_docked(app, want_docked)
 }
 
-/// 当前显示器的物理范围 `(x, y, w, h)`
-fn monitor_bounds(win: &tauri::WebviewWindow) -> Option<(i32, i32, i32, i32)> {
-    win.current_monitor()
+/// 形状中心所在的显示器物理范围 `(x, y, w, h)`。
+///
+/// **不能直接用 `current_monitor()`**：贴边时窗口（180 宽）会跨屏幕边界 ——
+/// 球停在右边缘、窗口右半边已经在隔壁屏上，`current_monitor()` 有时会判到隔壁那块，
+/// 钳制范围就整个错位：轮盘被推到隔壁屏、鼠标留在原地，于是「一展开就收回」。
+/// 按形状中心去问就不会有这种歧义（形状中心永远在球所在的那块屏上）。
+fn monitor_bounds(app: &AppHandle, cx: i32, cy: i32) -> Option<(i32, i32, i32, i32)> {
+    app.monitor_from_point(cx as f64, cy as f64)
         .ok()
         .flatten()
         .map(|monitor| {
@@ -361,24 +413,23 @@ fn monitor_bounds(win: &tauri::WebviewWindow) -> Option<(i32, i32, i32, i32)> {
         })
 }
 
-/// 展开成轮盘：inner 取 `edge`，位置让**窗口矩形**的中心停在形状中心，再整体钳进显示器。
+/// 轮盘定位：窗口矩形中心停在形状中心，再整体钳进显示器。
 ///
-/// 钳制很关键：胶囊是贴屏幕边缘停靠的，200×200 的轮盘以它为中心会有一半在屏幕外 ——
-/// 那一侧的卫星按钮就点不到了。钳进来之后轮盘会看着「从边缘滑进来」，
-/// 收起重置时照旧一比一还原，不会漂。
+/// 钳制很关键：胶囊贴屏幕边缘停靠，200×200 的轮盘以它为中心会有一半在屏幕外 ——
+/// 那一侧的卫星按钮就点不到了。钳进来之后轮盘会看着「从边缘滑进来」，收起重置时照旧
+/// 一比一还原，不会漂。
 ///
-/// 第三个返回值是**钳制造成的位移**（`target − 不钳制时的位置`）：球位于窗口中心，
+/// 返回值第二项是**钳制造成的位移**（`target − 不钳制时的位置`）：球位于窗口中心，
 /// 窗口一移球就跟着跳，前端要用它把球反向画回去。没有 `bounds` 时恒为 `(0, 0)`。
-fn expand_target(
-    size: PhysicalSize<u32>,
-    pos: PhysicalPosition<i32>,
-    frame: u32,
-    edge: u32,
+///
+/// `outer` 必须传**实测**的窗口尺寸（`set_size` 之后再读），不要用推算值 ——
+/// 窗口刚创建时 `inner_size` 会给出脏读数，推算出来的 frame 能让球整体偏 28px。
+fn wheel_position(
+    cx: f64,
+    cy: f64,
+    outer: PhysicalSize<u32>,
     bounds: Option<(i32, i32, i32, i32)>,
-) -> (PhysicalSize<u32>, PhysicalPosition<i32>, (i32, i32)) {
-    let cx = pos.x as f64 + size.width as f64 / 2.0;
-    let cy = pos.y as f64 + size.height as f64 / 2.0;
-    let outer = PhysicalSize::new(edge + frame, edge + frame);
+) -> (PhysicalPosition<i32>, (i32, i32)) {
     let centered = top_left_for_center(cx, cy, outer);
     let mut target = centered;
 
@@ -386,11 +437,7 @@ fn expand_target(
         target.x = clamp_into(target.x, bx, bw, outer.width as i32);
         target.y = clamp_into(target.y, by, bh, outer.height as i32);
     }
-    (
-        PhysicalSize::new(edge, edge),
-        target,
-        (target.x - centered.x, target.y - centered.y),
-    )
+    (target, (target.x - centered.x, target.y - centered.y))
 }
 
 /// 收起：把展开前记下的窗口矩形一比一还原（尺寸去掉边框就是 inner）
@@ -448,38 +495,26 @@ mod tests {
     fn expanding_keeps_the_orb_center_still() {
         // 常规球：窗口实测 136×84（52 高 + 上下各 16 余量；52 宽被 SM_CXMINTRACK 撑宽），
         // 球心在 (1000, 500)
-        let geom = Collapsed {
-            pos: PhysicalPosition::new(932, 458),
-            size: PhysicalSize::new(136, 84),
-            frame: 0,
-        };
+        // 形状中心 (1000, 500)、轮盘 200×200、没有显示器边界
+        let (pos, shift) = wheel_position(1000.0, 500.0, PhysicalSize::new(200, 200), None);
 
-        let (size, pos, shift) = expand_target(geom.size, geom.pos, geom.frame, 200, None);
-
-        assert_eq!(size, PhysicalSize::new(200, 200));
         assert_eq!(pos, PhysicalPosition::new(900, 400));
-        // 没有显示器边界就没有钳制，也就没有需要补偿的位移
+        // 没有边界就没有钳制，也就没有需要补偿的位移
         assert_eq!(shift, (0, 0));
-        // 窗口矩形中心仍是原来的形状中心
-        assert_eq!(pos.x as f64 + size.width as f64 / 2.0, 1000.0);
-        assert_eq!(pos.y as f64 + size.height as f64 / 2.0, 500.0);
+        // 窗口矩形中心仍停在原来的形状中心
+        assert_eq!(pos.x as f64 + 100.0, 1000.0);
+        assert_eq!(pos.y as f64 + 100.0, 500.0);
     }
 
     #[test]
     fn expanding_clamps_the_wheel_into_the_monitor() {
         // 胶囊贴右边缘（窗口 1844..1980、形状中心 1912）：不钳制的话轮盘有一半在屏幕外，
         // 右侧那颗卫星按钮就点不到了 —— 钳进来正好贴住右边
-        let geom = Collapsed {
-            pos: PhysicalPosition::new(1844, 420),
-            size: PhysicalSize::new(136, 96),
-            frame: 0,
-        };
-
-        let (_, pos, shift) = expand_target(
-            geom.size,
-            geom.pos,
-            geom.frame,
-            200,
+        // 形状中心 (1912, 468)，轮盘 200×200，屏幕 1920×1080
+        let (pos, shift) = wheel_position(
+            1912.0,
+            468.0,
+            PhysicalSize::new(200, 200),
             Some((0, 0, 1920, 1080)),
         );
         assert_eq!(pos, PhysicalPosition::new(1720, 368));
@@ -497,8 +532,8 @@ mod tests {
             frame: 6,
         };
 
-        let (edge, hub_pos, _) = expand_target(geom.size, geom.pos, geom.frame, 200, None);
-        assert_eq!(edge, PhysicalSize::new(200, 200));
+        // outer = 轮盘 200 + 边框 6 = 206；形状中心在 (968, 451)
+        let (hub_pos, _) = wheel_position(968.0, 451.0, PhysicalSize::new(206, 206), None);
         assert_eq!(hub_pos, PhysicalPosition::new(865, 348));
         // 客户区（inner）中心 = 左上角 + 边框/2 + inner/2，仍应落在原形状中心 (968, 451)
         assert_eq!(hub_pos.x as f64 + 3.0 + 100.0, 968.0);
