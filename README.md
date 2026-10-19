@@ -1,111 +1,145 @@
-# PPClip
+<p align="center">
+  <img src="src-tauri/icons/icon.png" width="96" alt="PPClip" />
+</p>
 
-轻量剪贴板 + 截图小工具：常驻一个桌面悬浮球（外加一个系统托盘图标），自动攒剪贴板历史
-（文本 / 图片 / 文件），支持区域与全屏截图，能把内容「贴」在桌面上随时查看。
+<h1 align="center">PPClip</h1>
 
-Tauri 2 + React 19；常驻内存约 100MB 量级（Rust 进程 + WebView2）。
+<p align="center">
+  <b>Windows 剪贴板历史 · 截图 · 桌面贴图</b><br />
+  复制过的文本、图片和文件自动收进历史；区域 / 全屏截图一键完成；需要时常驻的内容可以贴在桌面上。
+</p>
 
-## 功能（v1）
+<p align="center">
+  简体中文 · <a href="README.en.md">English</a>
+</p>
 
-| 能力 | 说明 |
+<p align="center">
+  <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows&logoColor=white" alt="Windows 10/11" />
+  <img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React 19" />
+  <img src="https://img.shields.io/badge/Rust-1.77%2B-000000?logo=rust&logoColor=white" alt="Rust" />
+  <img src="https://img.shields.io/badge/License-MIT-3DA639" alt="MIT License" />
+</p>
+
+<p align="center">
+  <img src="panel-final.png" width="420" alt="PPClip 历史面板" />
+</p>
+
+## 简介
+
+PPClip 是一个常驻桌面的 Windows 小工具：一个悬浮球加一枚托盘图标，没有常驻主窗口。
+单击悬浮球或托盘图标才会打开历史面板；复制的内容会按内容哈希去重后写入本地 SQLite，
+截图的结果同样会写回剪贴板并进入历史。
+
+数据全部保存在本机，应用不联网。
+
+## 功能
+
+- 📋 **剪贴板历史** —— 自动记录文本、图片和文件（资源管理器里复制的多个文件算一条）；重复复制只置顶、不新增；支持单条删除和清空全部
+- 🔍 **搜索与筛选** —— 关键词搜索，按全部 / 文本 / 图片 / 文件筛选
+- ✂️ **截图** —— 区域截图可拖出选区后继续微调，`Enter` / 双击确定、`Esc` / 右键取消；全屏截图覆盖光标所在显示器；结果自动进剪贴板和历史
+- 🪄 **三态悬浮球** —— 贴边胶囊 ↔ 常规球 ↔ 快捷轮盘；拖到屏幕边自动吸附，鼠标离开自动滑回；有新内容时带角标
+- 📌 **桌面贴图** —— 把文本或图片贴在桌面上，可拖动、滚轮缩放，重启后恢复位置和大小
+- 👁️ **查看窗口** —— 单例，停在面板旁边；文本可选中复制，图片支持适应窗口 / 原始尺寸，文件显示格式、大小、修改时间和路径，可按需计算 SHA-256 与 MD5
+- 🖥️ **面板置顶** —— 历史面板可以固定在最上层、点外部不收起；默认跟随普通窗口，失焦自动收回
+- ⚙️ **设置** —— 历史条数（默认 300）、图片存储上限（默认 200 MB）、数据目录、悬浮球显隐与不透明度、面板不透明度、开机自启
+- 🧩 **其他** —— 系统托盘、单实例（再次启动会唤回面板）、文件日志
+
+## 使用
+
+| 操作 | 说明 |
 |---|---|
-| 剪贴板历史 | 文本、图片、一次复制的多个文件；内容哈希去重（重复复制只置顶不新增）；搜索、按类型筛选；单条删除、清空全部；默认上限 300 条 + 图片 200MB |
-| 截图 | 区域截图（拖出选区后可继续微调，Enter / 双击确定，Esc 取消）、全屏截图（光标所在显示器）；结果自动写入剪贴板并进历史 |
-| 悬浮球 | 置顶、可拖动的入口，三种形态：贴边胶囊 → 鼠标放上去变成圆球 → 停 2 秒展开快捷盘（区域截图 / 全屏截图 / 剪贴板历史 / 隐藏悬浮球）；拖到屏幕边会吸附，鼠标离开自动滑回；有新条目时带角标 |
-| 托盘图标 | 左键开合面板；右键菜单：打开面板 / 区域截图 / 全屏截图 / 显示悬浮球 / 退出 PPClip |
-| 历史面板 | 列表显示预览（文本 / 图片缩略图 / 文件清单）；单击一条在右侧查看窗口打开详情，行尾图标是复制 / 贴到桌面 / 删除；↑↓ 选择、Enter 看详情、Ctrl+Enter 复制、Esc 收起；左上角设置，右上角桌面置顶与关闭 |
-| 查看窗口 | 完整内容：文本可选中复制，图片可缩放（适应窗口 / 原始尺寸），文件显示格式 / 大小 / 修改时间 / 路径，可按需算 SHA-256 与 MD5、在资源管理器里定位；窗口停在面板旁边，连点只换内容 |
-| 桌面贴图 | 把文本或图片钉在桌面上，可拖动、滚轮缩放、关闭；重启后按上次的位置与尺寸恢复 |
-| 设置 | 面板的第二屏：历史条数上限（50 一档）、图片存储上限、数据目录、悬浮球显隐与不透明度、面板不透明度、开机自启 |
-| 其他 | 单实例（再启动一次就唤回面板）、开机自启、文件日志 |
+| 悬浮球 · 单击 | 打开 / 收起历史面板 |
+| 悬浮球 · 拖动 | 移动位置；拖到屏幕边缘会吸附成胶囊 |
+| 贴边胶囊 · 悬停 | 展开成常规球；在球上停留 2 秒展开快捷轮盘 |
+| 托盘图标 | 左键开合面板，右键打开菜单 |
+| 面板 · 单击条目 | 在右侧查看窗口打开详情 |
+| 面板 · 行尾按钮 | 复制 / 贴到桌面 / 删除（删除需要点两次） |
+| 面板 · 左上角 / 右上角 | 设置 / 桌面置顶、关闭面板 |
+| 面板 · 键盘 | `↑` `↓` 选择 · `Enter` 详情 · `Ctrl+Enter` 复制 · `Esc` 收起 |
+| 查看窗口 | 图片双击切换「适应窗口 / 原始尺寸」；`Esc` 返回 |
+| 截图 | 拖出选区 → `Enter` 或双击确定；`Esc` / 右键取消 |
+| 桌面贴图 | 滚轮缩放；右键菜单；右上角关闭 |
 
-## 交互速查
+命令行截图（适合脚本调用）：
 
-- 悬浮球：单击开合面板；按住拖动可挪位置，拖到屏幕边会吸附成胶囊
-- 贴边胶囊：鼠标放上去展开成圆球；圆球上停 2 秒展开快捷盘；右键出原生菜单
-- 托盘图标：左键开合面板，右键出菜单
-- 面板：左上角齿轮进设置，右上角是桌面置顶和最右边的关闭
-- 面板：单击条目 → 右侧查看窗口打开详情；行尾图标是复制 / 贴到桌面 / 删除（删除要点两次）
-- 设置：面板不透明度只把玻璃底色调透，文字始终清晰；100% = 完全不透明
-- 查看窗口：Esc 返回；右上角复制、贴到桌面；图片双击在「适应窗口 / 原始尺寸」之间切换
-- 贴图：滚轮缩放，右键菜单，右上角 ✕ 关闭
-- 截图：拖出选区 → Enter 或双击确定，Esc / 右键取消
+```powershell
+ppclip.exe --capture-fullscreen
+```
 
-## 快速开始
+## 安装
 
-要求：Windows 10/11、Node 20+、Rust（MSVC 工具链）、WebView2 运行时（Win11 自带）。
+**系统要求**：Windows 10 / 11（x64），WebView2 运行时（Windows 11 自带，Windows 10 通常也已随 Edge 安装）。
+
+1. 打开 [Releases](https://github.com/purejiang/ppclip/releases) 下载最新的 `PPClip_x.y.z_x64-setup.exe`
+2. 双击安装（NSIS，当前用户，无需管理员权限）
+3. 启动后桌面会出现悬浮球，托盘也会出现 PPClip 图标
+
+> 如果 Releases 里还没有安装包，可以按[从源码构建](#从源码构建)自行打包。
+
+## 从源码构建
+
+需要 Node.js 20.19+、Rust（MSVC 工具链）和 WebView2。
 
 ```bash
+git clone https://github.com/purejiang/ppclip.git
+cd ppclip
 npm install
-npm run tauri:dev      # 开发：Vite + Rust 编译 + 悬浮球
-npm run tauri:build    # 打包：产出 NSIS 安装器
-npm run build          # 仅前端构建（tsc -b && vite build）
-npm run lint           # oxlint
+
+npm run tauri:dev     # 开发：Vite + Rust + 悬浮球
+npm run tauri:build   # 打包：NSIS 安装器
+```
+
+打包产物在 `src-tauri/target/release/bundle/nsis/`。
+
+其他命令：
+
+```bash
+npm run build         # 仅构建前端（tsc -b && vite build）
+npm run lint          # oxlint
 cd src-tauri && cargo test    # Rust 单元测试
 cd src-tauri && cargo check   # Rust 类型检查
 ```
 
-命令行截图（给脚本/冒烟测试用，结果照常写剪贴板并进历史）：
+**开发提示**
 
-```bash
-ppclip.exe --capture-fullscreen
-```
+- 直接运行 `cargo build` / `cargo check` 前需要先有 `dist/`（由 `npm run build` 生成），否则 `tauri::generate_context!` 会失败。
+- `src-tauri/Cargo.toml` 中 `[profile.dev.package.libsqlite3-sys] debug = false` 不要删除：MSVC 带调试信息编译 SQLite 会报 D8050。
+- 重新编译前先退出正在运行的 `ppclip.exe`，否则会遇到文件占用（os error 5）。
 
-打包产物：`src-tauri/target/release/bundle/nsis/PPClip_0.1.0_x64-setup.exe`
+## 数据与隐私
 
-## 数据位置
+所有数据只保存在本机，不上传、不同步，应用也不发起网络请求。
 
-`%APPDATA%\com.purejiang.ppclip\`
+默认位置：`%APPDATA%\com.purejiang.ppclip\`
 
 | 路径 | 内容 |
 |---|---|
-| `ppclip.db` | SQLite（clips / pins 两张表） |
-| `images/`、`thumbs/` | 图片原图与缩略图，文件名 = 内容 sha256 |
-| `cache/overlay.png` | 截图时的冻结图（用完即删） |
-| `settings.json` | 历史上限、图片上限、悬浮球/面板位置 |
+| `ppclip.db` | SQLite 数据库（clips / pins） |
+| `images/`、`thumbs/` | 图片原图与缩略图（文件名为内容 sha256） |
+| `settings.json` | 历史上限、图片上限、窗口位置等设置 |
 | `logs/ppclip.log` | 运行日志 |
 
-## 在受限环境（沙箱 / 自动化）里运行
+## 技术栈
 
-正常安装使用不需要看这段。应用启动时会**自己探测数据目录能不能写**，按顺序尝试：
+Tauri 2 · React 19 · TypeScript · Vite · Rust · rusqlite / SQLite
 
-1. `%APPDATA%\<identifier>` —— 标准位置，与 asset protocol 的 `$APPDATA/**` 对得上
-2. `%LOCALAPPDATA%\<identifier>` —— `$APPLOCALDATA/**`
-3. `<exe 同级>/ppclip-data` —— 便携兜底，`$EXE/**`
+界面不依赖 UI 组件库和图标字体：样式是手写的 CSS 变量，图标是手写的 SVG 组件。
 
-前一个写不了就用下一个，并在日志里留一条
-`WARN 标准数据目录 ... 不可写，已改用 ...`。**沙箱终端（例如 DSH 的开发终端）就是这种情况**：
-除项目目录外都写不了，它会自动落到第 2 或第 3 个位置 —— 所以 `npm run tauri:dev` 照常能跑，
-缩略图也照常显示（这三种位置都在 asset protocol 的 scope 里）。
+## 已知限制
 
-想手动指定位置就用环境变量。注意自定义位置**不在** scope 里，
-面板里的缩略图会加载不出来（日志出现 `asset protocol not configured to allow the path`）：
+- 没有全局热键：入口是悬浮球和托盘图标；隐藏悬浮球后，从托盘菜单召回。
+- 托盘图标不显示新条目数量（角标只在悬浮球上）。
+- 截图不支持标注、OCR、窗口截图和滚动长截图。
+- 文件条目只能查看和复制，不能贴到桌面。
+- 只记录纯文本、图片和文件列表，不保留富文本 / HTML 格式。
+- 多显示器下，选区只在光标所在的那块屏幕内完成（混合 DPI 跨屏选区未支持）。
+- 全屏独占应用（部分游戏、播放器）可能盖住悬浮球和桌面贴图。
 
-```powershell
-$env:PPCLIP_DATA_DIR = 'D:\tmp\ppclip-data'
-.\ppclip.exe --capture-fullscreen     # 附带：命令行全屏截图，写完剪贴板与历史后自动退出
-```
+## 贡献
 
-## 已知限制（v1 有意不做）
+欢迎提交 Issue 和 Pull Request。提交 PR 前建议先跑一遍 `npm run lint`、`npm run build` 和 `cd src-tauri && cargo test`。
 
-- 没有全局热键 —— 入口是悬浮球和托盘图标；隐藏悬浮球后，用托盘菜单的「显示悬浮球」召回。
-- 托盘上只有图标和菜单，不显示新条目数量（角标只在悬浮球上）。
-- 截图不支持标注（矩形/箭头/马赛克/文字）、OCR、窗口截图、滚动长截图。
-- 只记录文本、图片与文件列表，不保留富文本/HTML 格式。
-- 多显示器仅支持在**光标所在的那块屏幕**内完成选区（混合 DPI 下跨屏选区留给后续版本）。
+## License
 
-## 构建相关注意事项
-
-1. **`src-tauri/Cargo.toml` 里的 `[profile.dev.package.libsqlite3-sys] debug = false` 不能删。**
-   本机环境里 MSVC 带调试信息编译 `sqlite3.c` 会失败（`cl: error D8050 无法执行 c1.dll`），
-   关掉该 C 依赖的调试信息即可绕过；Rust 侧仍保留调试符号。
-2. **编译 Rust 前必须存在 `dist/`**（`tauri::generate_context!` 会检查 `frontendDist`）。
-   先跑一次 `npm run build`，或直接用 `npm run tauri:dev`。
-3. 重新编译前确认 `ppclip.exe` 已退出，否则会报文件占用（os error 5）。
-4. 更换图标：替换 `src-tauri/icons/` 后需要重新 `cargo build`（图标嵌进二进制）；
-   原始图源是仓库根目录的 `icon-source.png`，可用 `npx tauri icon icon-source.png` 重新生成整套。
-
-## 发布约定
-
-沿用 openstart 的做法：`dev` 日常开发，`main` 只接收合并并在其上打 tag
-（`git tag -a vX.Y.Z` + `git push`），打包后创建 GitHub Release。
+MIT
