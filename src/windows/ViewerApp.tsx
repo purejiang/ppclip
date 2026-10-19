@@ -1,16 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { api, assetUrl, dataDir } from "../api";
 import {
+  IconActualSize,
+  IconArrowBack,
   IconCheck,
-  IconClose,
+  IconClipboard,
   IconCopy,
-  IconCropFree,
+  IconFile,
   IconFitScreen,
   IconImage,
-  IconPin,
-  IconPublic,
+  IconFloatCard,
   IconScan,
   IconSchedule,
   IconSelectAll,
@@ -31,6 +32,17 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
+/** 文件条目：取路径最后一段做文件名 */
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+/** 文件条目：去掉文件名后的所在目录 */
+function fileDir(path: string): string {
+  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+  return cut > 0 ? path.slice(0, cut) : path;
+}
+
 /** RFC3339 → 本地时间；后端存的是 UTC */
 function formatTime(raw: string): string {
   const date = new Date(raw);
@@ -40,7 +52,7 @@ function formatTime(raw: string): string {
 /**
  * 完整内容窗口（单例，label `viewer`），照 stitch 稿的「详情页」：
  *
- * 48px 头部（← 关闭 / 居中品牌 + 类型图标 / 贴到桌面）→ 内容卡片
+ * 48px 头部（← 返回 / 居中品牌 + 类型图标 / 贴到桌面）→ 内容卡片
  * （meta 条：来源徽章 · 时间 ／ 尺寸 / 大小 / 格式 chip）→ 点阵网格内容区
  * （图片右下角是缩放控件浮层）→ 底部操作行（复制 / 原始尺寸 / 全选）→ 页脚 MIME。
  *
@@ -60,10 +72,14 @@ export default function ViewerApp() {
   const [zoom, setZoom] = useState(1);
   /** 顶部居中的提示条（稿子里的 toast）：复制 / 贴图之后给一次反馈 */
   const [toast, setToast] = useState<string | null>(null);
-  /** 当前条目是否已经贴在桌面上（图钉按钮据此变成「取消贴图」） */
+  /** 当前条目是否已经贴在桌面上（浮窗按钮据此变成「取消贴图」） */
   const [pinned, setPinned] = useState(false);
   const textRef = useRef<HTMLPreElement>(null);
+  const fileListRef = useRef<HTMLDivElement>(null);
   const isImage = clip?.kind === "image";
+  const isFile = clip?.kind === "file";
+  /** 正文：文本类就是 `text`（文件类有专门的列表布局，不走这里） */
+  const body = clip && !isFile ? (clip.text ?? "") : "";
 
   /** 提示条 1.8 秒后自己消失 */
   useEffect(() => {
@@ -120,7 +136,7 @@ export default function ViewerApp() {
     }
   };
 
-  /** 贴图开关：已经贴着就关掉，没贴就贴一张（稿子里图钉按钮是 toggle 语义） */
+  /** 贴图开关：已经贴着就关掉，没贴就贴一张（那个按钮是 toggle 语义） */
   const togglePin = async () => {
     if (clipId === null) return;
     try {
@@ -140,14 +156,6 @@ export default function ViewerApp() {
     }
   };
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") void api.closeViewer();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
   const zoomBy = (factor: number) => {
     setFit(false);
     setZoom((value) =>
@@ -155,16 +163,30 @@ export default function ViewerApp() {
     );
   };
 
-  /** 全选正文（文本模式下比手拖更常用） */
-  const selectAll = () => {
-    const node = textRef.current;
+  /** 全选正文（文本选 `<pre>`，文件选整个路径列表） */
+  const selectAll = useCallback(() => {
+    const node = textRef.current ?? fileListRef.current;
     if (!node) return;
     const selection = window.getSelection();
     selection?.removeAllRanges();
     selection?.selectAllChildren(node);
-  };
+  }, []);
 
-  const chars = clip?.text?.length ?? clip?.preview.length ?? 0;
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") void api.closeViewer();
+      // Ctrl+A = 全选正文（WebView 不会自己拦，这里显式接住）；
+      // Ctrl+C 不用管 —— 有选区时原生复制就生效
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && !isImage) {
+        e.preventDefault();
+        selectAll();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isImage, selectAll]);
+
+  const chars = body.length;
   const zoomLabel = fit ? "适应" : `${Math.round(zoom * 100)}%`;
 
   return (
@@ -174,30 +196,33 @@ export default function ViewerApp() {
           <button
             type="button"
             className="app-header-button"
-            title="关闭（Esc）"
-            aria-label="关闭查看窗口"
+            title="返回（Esc）"
+            aria-label="返回"
             onClick={() => void api.closeViewer()}
           >
-            <IconClose size={16} />
+            <IconArrowBack size={16} />
           </button>
         </div>
 
         <div className="app-brand">
-          {isImage ? <IconImage size={16} /> : <IconText size={16} />}
+          {isImage ? <IconImage size={16} /> : isFile ? <IconFile size={16} /> : <IconText size={16} />}
           PPCLIP
         </div>
 
         <div className="app-header-side">
-          <button
-            type="button"
-            className={`app-header-button app-header-button--tertiary${pinned ? " is-on" : ""}`}
-            title={pinned ? "取消贴图" : "贴到桌面"}
-            aria-label={pinned ? "取消贴图" : "贴到桌面"}
-            aria-pressed={pinned}
-            onClick={() => void togglePin()}
-          >
-            <IconPin size={16} />
-          </button>
+          {/* 文件条目贴不了桌面（后端会拒），这里干脆不摆按钮 */}
+          {!isFile && (
+            <button
+              type="button"
+              className={`app-header-button app-header-button--tertiary${pinned ? " is-on" : ""}`}
+              title={pinned ? "取消贴图" : "贴到桌面"}
+              aria-label={pinned ? "取消贴图" : "贴到桌面"}
+              aria-pressed={pinned}
+              onClick={() => void togglePin()}
+            >
+              <IconFloatCard size={16} />
+            </button>
+          )}
         </div>
       </header>
 
@@ -221,7 +246,7 @@ export default function ViewerApp() {
                   {clip?.source === "screenshot" ? (
                     <IconScan size={13} />
                   ) : (
-                    <IconPublic size={13} />
+                    <IconClipboard size={13} />
                   )}
                   {clip?.source === "screenshot" ? "区域截图" : "剪贴板"}
                 </span>
@@ -239,6 +264,14 @@ export default function ViewerApp() {
                     </span>
                     <span className="meta-chip">{formatBytes(clip?.bytes ?? 0)}</span>
                     <span className="meta-chip meta-chip--primary">PNG</span>
+                  </>
+                ) : isFile ? (
+                  <>
+                    <span className="meta-chip meta-chip--secondary">
+                      {clip?.files?.length ?? 0} 个文件
+                    </span>
+                    <span className="meta-chip">{formatBytes(clip?.bytes ?? 0)}</span>
+                    <span className="meta-chip meta-chip--primary">路径</span>
                   </>
                 ) : (
                   <>
@@ -289,8 +322,25 @@ export default function ViewerApp() {
               )}
               {clip?.kind === "text" && (
                 <pre ref={textRef} className="viewer-text">
-                  {clip.text}
+                  {body}
                 </pre>
+              )}
+
+              {/* 文件条目有专门的详情：一行一个文件，而不是一坨路径文本 */}
+              {isFile && clip && (
+                <div ref={fileListRef} className="viewer-files">
+                  {(clip.files ?? []).length === 0 ? (
+                    <p className="viewer-files-empty">没有可显示的文件路径</p>
+                  ) : (
+                    (clip.files ?? []).map((path) => (
+                      <div key={path} className="viewer-file-row" title={path}>
+                        <IconFile size={15} />
+                        <span className="viewer-file-name">{fileName(path)}</span>
+                        <span className="viewer-file-dir">{fileDir(path)}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
               )}
 
               {isImage && src && (
@@ -337,7 +387,7 @@ export default function ViewerApp() {
                       setZoom(1);
                     }}
                   >
-                    <IconCropFree size={13} />
+                    <IconActualSize size={13} />
                   </button>
                 </div>
               )}
@@ -364,7 +414,7 @@ export default function ViewerApp() {
                       setZoom(1);
                     }}
                   >
-                    {fit ? <IconCropFree size={13} /> : <IconFitScreen size={13} />}
+                    {fit ? <IconActualSize size={13} /> : <IconFitScreen size={13} />}
                     {fit ? "原始尺寸" : "适应窗口"}
                   </button>
                 ) : (
@@ -384,11 +434,11 @@ export default function ViewerApp() {
 
       <footer className="app-footer">
         <div className="app-footer-group mono">
-          <span>MIME: {isImage ? "image/png" : "text/plain"}</span>
+          <span>MIME: {isImage ? "image/png" : isFile ? "text/uri-list" : "text/plain"}</span>
         </div>
         <div className="app-footer-group">
           <span className="kbd">Esc</span>
-          <span>关闭</span>
+          <span>返回</span>
           <span className="app-footer-dot" aria-hidden="true" />
           <span>{clip ? `创建 ${formatTime(clip.createdAt)}` : "加载中…"}</span>
         </div>

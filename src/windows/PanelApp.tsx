@@ -6,20 +6,22 @@ import ClipRow from "../components/ClipRow";
 import SettingsPage from "../components/SettingsPage";
 import {
   IconArrowBack,
-  IconBroom,
+  IconEraser,
   IconClipboardArrow,
   IconGear,
+  IconKeepOnTop,
   IconMonitor,
   IconScan,
   IconSearch,
 } from "../components/icons";
 import type { Clip, ClipStats, KindFilter } from "../types";
 
-/** 筛选：稿子里是 All / Text / Images / Files，我们只有文本与图片两类 */
+/** 筛选：稿子里是 All / Text / Images / Files，四种都有对应条目类型 */
 const FILTERS: { key: KindFilter; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "text", label: "文本" },
   { key: "image", label: "图片" },
+  { key: "file", label: "文件" },
 ];
 
 function formatBytes(bytes: number): string {
@@ -49,10 +51,12 @@ export default function PanelApp() {
   const [now, setNow] = useState(() => Date.now());
   /** 正在等第二次点击确认删除的条目 id */
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
-  /** 已经贴在桌面上的条目 id（图钉按钮据此点亮 / 变成取消贴图） */
+  /** 已经贴在桌面上的条目 id（浮窗按钮据此点亮 / 变成取消贴图） */
   const [pinnedIds, setPinnedIds] = useState<number[]>([]);
   /** 历史条目上限，状态条显示 `n / 上限` */
   const [maxItems, setMaxItems] = useState(300);
+  /** 面板是否「桌面置顶」（常驻最上层 + 点外部不关） */
+  const [pinned, setPinned] = useState(false);
   const [clearing, setClearing] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -78,7 +82,7 @@ export default function PanelApp() {
     void api.deleteClip(clip.id);
   };
 
-  /** 贴到桌面 / 取消贴图（稿子行里的图钉是 toggle 语义） */
+  /** 贴到桌面 / 取消贴图（行里那个按钮是 toggle 语义） */
   const handlePin = async (clip: Clip) => {
     try {
       setError(null);
@@ -103,6 +107,7 @@ export default function PanelApp() {
       setClips(list);
       setStats(nextStats);
       setMaxItems(settings.maxItems);
+      setPinned(settings.panelPinned);
       setPinnedIds(pins.map((pin) => pin.clipId));
       setActive((index) => Math.min(index, Math.max(0, list.length - 1)));
       setError(null);
@@ -220,6 +225,23 @@ export default function PanelApp() {
     }
   };
 
+  /**
+   * 桌面置顶开关：后端一次改两处 —— 窗口 `always_on_top` 与落盘的 `panelPinned`。
+   * 关掉之后面板会在失焦时自动收起（Rust 侧 `WindowEvent::Focused`），
+   * 所以开关的文案要如实说清「点外部会关」。
+   */
+  const togglePinned = async () => {
+    const next = !pinned;
+    setPinned(next);
+    try {
+      setError(null);
+      await api.setPanelPinned(next);
+    } catch (err) {
+      setPinned(!next);
+      setError(`切换桌面置顶失败：${String(err)}`);
+    }
+  };
+
   const clearAll = async () => {
     setClearing(true);
     try {
@@ -260,15 +282,31 @@ export default function PanelApp() {
 
         <div className="app-header-side">
           {!settingsOpen && (
-            <button
-              type="button"
-              className="app-header-button app-header-button--primary"
-              title="设置"
-              aria-label="设置"
-              onClick={() => setSettingsOpen(true)}
-            >
-              <IconGear size={16} />
-            </button>
+            <>
+              <button
+                type="button"
+                className={`app-header-button app-header-button--tertiary${pinned ? " is-on" : ""}`}
+                title={
+                  pinned
+                    ? "已开启桌面置顶：面板常驻最上层，点外部不会关"
+                    : "桌面置顶：常驻最上层，点外部不关闭"
+                }
+                aria-label="桌面置顶"
+                aria-pressed={pinned}
+                onClick={() => void togglePinned()}
+              >
+                <IconKeepOnTop size={16} />
+              </button>
+              <button
+                type="button"
+                className="app-header-button app-header-button--primary"
+                title="设置"
+                aria-label="设置"
+                onClick={() => setSettingsOpen(true)}
+              >
+                <IconGear size={16} />
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -316,7 +354,9 @@ export default function PanelApp() {
             <div className="clip-list">
               {clips.length === 0 ? (
                 <p className="placeholder">
-                  {debounced ? "没有匹配的记录" : "还没有记录：复制一段文字或一张图试试"}
+                  {debounced
+                    ? "没有匹配的记录"
+                    : "还没有记录：复制一段文字、一张图，或几个文件试试"}
                 </p>
               ) : (
                 clips.map((clip, index) => (
@@ -371,7 +411,7 @@ export default function PanelApp() {
                   disabled={clearing}
                   onClick={() => void clearAll()}
                 >
-                  <IconBroom size={14} />
+                  <IconEraser size={14} />
                 </button>
               </div>
             </div>
@@ -387,7 +427,9 @@ export default function PanelApp() {
           <span className="app-footer-dot" aria-hidden="true" />
           <span>
             {stats
-              ? `${stats.textCount} 文本 · ${stats.imageCount} 图片 · ${formatBytes(stats.imageBytes)}`
+              ? `${stats.textCount} 文本 · ${stats.imageCount} 图片${
+                  stats.fileCount > 0 ? ` · ${stats.fileCount} 文件` : ""
+                } · ${formatBytes(stats.imageBytes)}`
               : "Ready"}
           </span>
         </div>

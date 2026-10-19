@@ -37,6 +37,8 @@ pub struct CaptureState(pub Mutex<Option<CaptureSession>>);
 
 /// 本应用常驻窗口：截图前必须藏起来，否则会被拍进画面
 /// （查看窗口是运行时开的，但一直在用，所以放这里）
+// 不含 "wheel"：轮盘窗口常显、收起时停在所有显示器之外（见 `ballhub::park_wheel`），
+// 拍不到也吃不到点击；而 hide→show 会把焦点抢过来。
 const PERSISTENT_WINDOWS: [&str; 3] = ["ball", "main", crate::viewer::VIEWER_LABEL];
 
 /// 开始区域截图：抓冻结图 → 藏自己的窗口 → 起 overlay
@@ -375,10 +377,10 @@ fn cleanup_overlay(app: &AppHandle, session: &CaptureSession) {
 
 /// 藏起本应用所有窗口，返回「原本可见」的 label 列表
 fn hide_own_windows(app: &AppHandle) -> Vec<String> {
-    // 悬浮球的枢纽态要一起收回：窗口藏起来后前端收不到 mouseleave，
-    // 下次显示出来会是个 240×240 的大方框（见 `crate::ballhub`）
-    if let Err(err) = crate::ballhub::set_expanded(app, false) {
-        log::warn!("截图前收回悬浮球枢纽态失败: {err}");
+    // 轮盘要一起收回：窗口藏起来后前端收不到 mouseleave，
+    // 下次显示出来会是一圈卡住的按钮（见 `crate::ballhub`）
+    if let Err(err) = crate::ballhub::close_wheel_now(app) {
+        log::warn!("截图前收回轮盘失败: {err}");
     }
 
     let mut labels: Vec<String> = PERSISTENT_WINDOWS.iter().map(|s| s.to_string()).collect();

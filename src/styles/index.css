@@ -91,7 +91,7 @@ body,
 
 /* ---------- 按窗口类型切底色 ---------- */
 
-/* 悬浮球 / 贴图：整块画布必须透明，否则形状外面会顶着一张方底 */
+/* 悬浮球 / 轮盘 / 贴图：整块画布必须透明，否则形状外面会顶着一张方底 */
 html[data-window="ball"],
 html[data-window="ball"] body,
 html[data-window="ball"] #root,
@@ -140,6 +140,7 @@ html[data-window="overlay"] #root {
 }
 
 .app-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -152,7 +153,9 @@ html[data-window="overlay"] #root {
   user-select: none;
 }
 
-/* 稿子里的标题是「左占位 + 居中品牌 + 右按钮」，两侧都留 32 才真的居中 */
+/* 稿子里的标题是「左占位 + 居中品牌 + 右按钮」。
+   品牌用**绝对居中**而不是靠两侧等宽撑：右上角按钮的数量会变（设置 / 置顶），
+   靠 flex 留白的话每多一个按钮标题就往左挪 36px。 */
 .app-header-side {
   display: flex;
   align-items: center;
@@ -161,18 +164,25 @@ html[data-window="overlay"] #root {
 }
 
 .app-brand {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  flex: 1 1 auto;
-  min-width: 0;
+  /* 两侧按钮区各留 76，标题太长就省略，别压到按钮上 */
+  max-width: calc(100% - 152px);
+  overflow: hidden;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--on-surface);
   white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 
 .app-brand svg {
@@ -215,7 +225,7 @@ html[data-window="overlay"] #root {
   color: var(--tertiary);
 }
 
-/* 图钉按钮的「已贴上」状态 */
+/* 贴到桌面按钮的「已贴上」状态 */
 .app-header-button.is-on {
   color: var(--tertiary);
   background: rgb(var(--tertiary-rgb) / 16%);
@@ -627,7 +637,7 @@ html[data-window="overlay"] #root {
   color: var(--tertiary);
 }
 
-/* 已经贴在桌面上：图钉常亮，再点就是取消 */
+/* 已经贴在桌面上：浮窗按钮常亮，再点就是取消 */
 .clip-action--pin.is-on {
   color: var(--tertiary);
   background: rgb(var(--tertiary-rgb) / 14%);
@@ -1126,10 +1136,38 @@ input[type="range"].slider::-webkit-slider-thumb {
   display: block;
 }
 
-.pin-text {
+/* 文本贴图的主体：顶部 grip（拖动条）+ 可选中复制的正文 */
+.pin-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   width: 100%;
   height: 100%;
-  padding: 12px 14px;
+}
+
+.pin-grip {
+  flex: 0 0 auto;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: 8px;
+  background: rgb(var(--surface-container) / 60%);
+  cursor: grab;
+}
+
+.pin-grip-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--on-surface-variant);
+}
+
+.pin-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 10px 14px 12px;
   overflow: auto;
   border: 1px solid rgb(var(--outline-variant) / 30%);
   border-radius: 12px;
@@ -1139,6 +1177,8 @@ input[type="range"].slider::-webkit-slider-thumb {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+  user-select: text;
+  cursor: text;
 }
 
 .pin-close {
@@ -1385,6 +1425,60 @@ input[type="range"].slider::-webkit-slider-thumb {
   overflow: auto;
 }
 
+/* 文件条目详情：一行一个文件（图标 + 文件名 + 所在目录），不是文本 pre */
+.viewer-files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 10px;
+  user-select: text;
+}
+
+.viewer-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgb(var(--surface-container) / 55%);
+}
+
+.viewer-file-row svg {
+  flex: 0 0 auto;
+  color: var(--on-surface-variant);
+}
+
+.viewer-file-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--on-surface);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.viewer-file-dir {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--on-surface-variant);
+  font-family: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+  font-size: 10px;
+  text-align: right;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.viewer-files-empty {
+  margin: 0;
+  padding: 12px;
+  color: var(--on-surface-variant);
+  font-size: 12px;
+}
+
 .viewer-actions-row {
   display: flex;
   align-items: center;
@@ -1410,22 +1504,27 @@ input[type="range"].slider::-webkit-slider-thumb {
 }
 
 
-/* ---------- 悬浮入口：三态（贴边胶囊 / 常规球 / 展开态轮盘） ----------
+/* ---------- 悬浮入口：一扇窗、三种形状（贴边胶囊 / 常规球 / 展开轮盘） ----------
  *
  * 照 stitch 稿「桌面悬浮球三态规范」：
  *   State 01 收起边缘态 16×64 对称胶囊（贴屏幕左/右边缘，左右通用）
  *   State 02 常规态     52×52 渐变环悬浮球（桌面任意位置）
  *   State 03 展开态     轮盘（稿子 240×240，实际收到 200×200）
- * 三个形状尺寸和 ballhub.rs 里的常量绑死，只改配色和质感。
+ * 形状尺寸和 `ballhub/geom.rs` 里的常量绑死，只改配色和质感。
+ *
+ * 三种形状同在一扇 `ball` 窗里：收起态窗口是 96×96，展开态撑成 232×232（盘 + 四周各 16）。
+ * 换尺寸 / 换位置之间那一帧会错位，靠 `.is-switching`（`visibility: hidden`）整块藏掉。
  *
  * 收起态的**窗口客户区**比形状大一圈：上下各 16px 透明余量
  * （`ballhub::SHAPE_PAD_LOGICAL`）。**别把窗口高度改回和形状一样高** ——
- * 窗口宽度被 SM_CXMINTRACK 撑到 136，形状两侧天然有 40+px 富余，横向投影一直是完整的；
+ * 窗口宽度被 SM_CXMINTRACK 撑宽，形状两侧天然有富余，横向投影一直是完整的；
  * 但竖向只要没有余量，`.ball-orb-body` 的投影与右上角标就会被窗口边界切平
  * （实测剖面：形状上下边缘之外全为 0，横向却是平滑渐隐）。
  *
- * 三种形态互斥，交叉淡入淡出：形态由窗口客户区高度推（`BallApp.tsx::applySize`），
- * 前端只负责把 `.is-tab` / `.is-orb` / `.is-wheel` 这三个类挂上去。
+ * 两种收起态**共用同一扇窗、同一个窗口尺寸**，互斥淡入淡出：形态由 Rust 侧
+ * `ballhub` 单向决定（经 `ball:form` 快照 + 事件下发），前端只负责挂
+ * `.is-tab` / `.is-orb` 这两个类。**不要从前端按窗口尺寸反推形态** —— tab 与 orb
+ * 的高度差已经不存在了，而且读到一帧旧尺寸就会挂错类、跳一下。
  */
 
 .ball-root {
@@ -1436,6 +1535,8 @@ input[type="range"].slider::-webkit-slider-thumb {
   background: transparent;
   user-select: none;
 }
+
+/* 轮盘开着时球那两种形状不挂 is-tab / is-orb，天然不显示（中心盘由 .ball-core 画）。 */
 
 /* 以形状中心为圆心的方框画布：绝对定位 + translate(-50%,-50%)，
    窗口比画布小时（收起态只有 52/64 高）也必须居中溢出 */
@@ -1610,7 +1711,12 @@ input[type="range"].slider::-webkit-slider-thumb {
   animation: status-pulse 2s ease-in-out infinite;
 }
 
-/* ---------- State 03 展开态：200×200 HUD 轮盘 ---------- */
+/* ---------- State 03 展开态：200×200 HUD 轮盘 ----------
+ *
+ * 窗口是 232×232 = 200 的盘 + 四周各 16 的透明余量：盘面的 `0 12px 40px` 投影要画得下
+ * （以前 200×200 的窗口直接把它切平了）。数值和 Rust 侧 `ballhub::geom` 的
+ * WHEEL_PAD_LOGICAL 必须同步。
+ */
 
 .ball-wheel {
   position: absolute;
@@ -1633,10 +1739,20 @@ input[type="range"].slider::-webkit-slider-thumb {
     transform 220ms cubic-bezier(0.22, 0.9, 0.3, 1.1);
 }
 
-.ball-root.is-wheel .ball-wheel {
+.ball-root.is-wheel-open .ball-wheel {
   opacity: 1;
   pointer-events: auto;
   transform: translate(-50%, -50%) scale(1);
+}
+
+/* 退场：只缩一小圈、淡出，140ms 跟前端的 EXIT_MS 对齐 */
+.ball-root.is-wheel-closing .ball-wheel {
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.9);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
 }
 
 /* 虚线轨道：稿子 240 上 r=90 → 200 上 r=75（直径 150，inset 25） */
@@ -1648,9 +1764,11 @@ input[type="range"].slider::-webkit-slider-thumb {
   pointer-events: none;
 }
 
-/* 四个卫星按钮：稿子 240 上 32×32、贴边 8 → 200 上 28×28、贴边 6 */
+/* 四个卫星按钮：稿子 240 上 32×32、贴边 8 → 200 上 28×28、贴边 6。
+   z-index 3：压在所有装饰层之上，保证四颗永远点得到。 */
 .ball-sat {
   position: absolute;
+  z-index: 3;
   display: grid;
   place-items: center;
   width: 28px;
@@ -1712,9 +1830,16 @@ input[type="range"].slider::-webkit-slider-thumb {
   transform: translateY(-50%) scale(1.1);
 }
 
-/* 中心圆盘：稿子 240 上 80px → 200 上 70px，2px 渐变环 + 外发光 */
+/* 中心圆盘：稿子 240 上 80px → 200 上 70px，2px 渐变环 + 外发光。
+ *
+ * 位置**就是盘心**（`.ball-wheel` 里居中），不许再偏移。贴边展开时盘为了整块进屏幕
+ * 会被钳向内（最多 74px），盘心因此离开球原来的位置 —— 但中心盘必须留在盘中间，
+ * 否则看起来像「球跑到轮盘边上去了」（曾经按「球钉在原地」做过补偿，真机就是这个观感）。
+ * 轮盘展开时球已经藏起来了，没人会看见盘心的位移。 */
 .ball-core {
-  position: relative;
+  position: absolute;
+  top: 50%;
+  left: 50%;
   z-index: 2;
   width: 70px;
   height: 70px;
@@ -1728,20 +1853,22 @@ input[type="range"].slider::-webkit-slider-thumb {
     var(--tertiary)
   );
   box-shadow: 0 0 24px rgb(var(--primary-rgb) / 50%);
-  cursor: grab;
+  cursor: pointer;
   pointer-events: auto;
+  transform: translate(-50%, -50%) scale(var(--core-scale, 1));
+  transition: transform 220ms cubic-bezier(0.22, 0.9, 0.3, 1.1);
 }
 
-.ball-core:active {
-  cursor: grabbing;
+/* 入场：中心盘从球的大小（52/70）长成盘面尺寸，视觉上「球长成了中心盘」 */
+.ball-root:not(.is-wheel-open) .ball-core {
+  --core-scale: 0.74;
 }
 
-/* 贴边撑开轮盘时，轮盘为了整块进屏幕会把窗口推开，球在窗口中心就跟着跳一下。
-   把中心球按反向位移画回原来的屏幕位置 —— 观感是「球钉在原地、轮盘从旁边展开」。
-   偏移量由 Rust 算好经 CSS 变量注入（命令 `ball_wheel_shift`，单位 CSS px）。
-   球因此不再停在轮盘正中，这是「球不动」必须付的代价。 */
-.ball-root.is-wheel .ball-core {
-  transform: translate(var(--hub-shift-x, 0px), var(--hub-shift-y, 0px));
+/* 几何切换的那一帧：换尺寸 / 换位置是两次 OS 调用，中间必然有一帧按旧窗口中心绘制。
+   那帧把内容藏掉（visibility 连点击一起关掉），用户看到的是「球消失 → 轮盘淡入」，
+   而不是「球先跳一下」。这是单窗口方案里唯一需要人为遮的一帧。 */
+.ball-root.is-switching {
+  visibility: hidden;
 }
 
 .ball-core-inner {

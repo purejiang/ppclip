@@ -20,12 +20,29 @@ pub fn update_settings(
     settings: AppSettings,
 ) -> Result<(), String> {
     let data_dir = app.state::<DataDir>().0.clone();
-    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = settings.clone();
-    crate::settings::save_settings(&data_dir, &settings)?;
+    let mut next = settings.clone();
+    {
+        // 悬浮球 / 面板的几何是**窗口自己**在拖动、吸附、换形态时写的真相，
+        // 设置页手里那份是打开设置那一刻的旧快照。整份回写会把期间拖出来的位置覆盖掉，
+        // 所以这几项一律以内存里的当前值为准。
+        let current = state.0.lock().unwrap_or_else(|e| e.into_inner());
+        next.ball_x = current.ball_x;
+        next.ball_y = current.ball_y;
+        next.ball_anchor_x = current.ball_anchor_x;
+        next.ball_anchor_y = current.ball_anchor_y;
+        next.ball_docked = current.ball_docked;
+        next.panel_x = current.panel_x;
+        next.panel_y = current.panel_y;
+        // 置顶同理：它只由面板右上角那个按钮改（`set_panel_pinned`），
+        // 设置页手里那份是打开那一刻的旧快照，整份回写会把期间切过的状态抹掉
+        next.panel_pinned = current.panel_pinned;
+    }
+    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    crate::settings::save_settings(&data_dir, &next)?;
 
     // 上限调小后立刻生效，不然要等下次复制才淘汰
     if let Some(storage) = app.try_state::<Storage>() {
-        if let Err(err) = storage.evict(settings.max_items, settings.max_image_mb) {
+        if let Err(err) = storage.evict(next.max_items, next.max_image_mb) {
             log::warn!("按新设置淘汰失败: {err}");
         }
     }
@@ -70,31 +87,55 @@ pub fn hide_panel(app: AppHandle) {
     crate::hide_panel(&app);
 }
 
-/// 隐藏悬浮入口。恢复入口：再次启动 PPClip（单实例回调会把它显示回来）。
+/// 面板「桌面置顶」开关（面板右上角的图钉）。
+///
+/// 两件事必须一起变，缺一个都会出现半吊子状态：
+/// ① 窗口的 `always_on_top` —— 关着的时候面板是普通窗口，会被别的程序盖住；
+/// ② 落盘的 `panel_pinned` —— 失焦自动收起（`lib.rs::WindowEvent::Focused`）
+///    和下次启动要不要直接把面板摆出来，都读它。
+#[tauri::command]
+pub fn set_panel_pinned(
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+    pinned: bool,
+) -> Result<(), String> {
+    let data_dir = app.state::<DataDir>().0.clone();
+    let snapshot = {
+        let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+        guard.panel_pinned = pinned;
+        guard.clone()
+    };
+    crate::settings::save_settings(&data_dir, &snapshot)?;
+    crate::apply_panel_pinned(&app, pinned);
+    let _ = app.emit(SETTINGS_CHANGED_EVENT, ());
+    log::info!("面板桌面置顶 → {}", if pinned { "开" } else { "关" });
+    Ok(())
+}
+
+/// 隐藏悬浮入口（连同轮盘）。恢复入口：再次启动 PPClip（单实例回调会把它显示回来）。
 #[tauri::command]
 pub fn hide_ball(app: AppHandle) {
-    // 先收回枢纽态：窗口藏起来后前端收不到 mouseleave，会带着 260×260 的
-    // 大窗口再出现（那时鼠标在别处，看着就像个卡住的大方块）
-    if let Err(err) = crate::ballhub::set_expanded(&app, false) {
-        log::warn!("隐藏悬浮球前收回枢纽态失败: {err}");
-    }
-    if let Some(ball) = app.get_webview_window("ball") {
-        let _ = ball.hide();
+    // 先收回轮盘：窗口藏起来后前端收不到 mouseleave，会带着那扇吃点击的置顶窗再出现
+    if let Err(err) = crate::ballhub::hide(&app) {
+        log::warn!("隐藏悬浮球失败: {err}");
     }
 }
 
 #[tauri::command]
 pub fn show_ball(app: AppHandle) {
-    if let Some(ball) = app.get_webview_window("ball") {
-        let _ = ball.show();
+    if let Err(err) = crate::ballhub::show(&app) {
+        log::warn!("显示悬浮球失败: {err}");
     }
 }
 
 /// 悬浮球当前是不是露着的（设置页的开关要如实反映状态）
+///
+/// 只看 `ball` 那扇窗：`wheel` 常显但停在屏幕外（见 `ballhub` 的 `park_wheel`），
+/// 它的可见性没有意义。
 #[tauri::command]
 pub fn ball_visible(app: AppHandle) -> bool {
     app.get_webview_window("ball")
-        .and_then(|ball| ball.is_visible().ok())
+        .and_then(|win| win.is_visible().ok())
         .unwrap_or(false)
 }
 
@@ -116,151 +157,68 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
     }
 }
 
-/// 鼠标悬停时把悬浮球撑成 HUD 轮盘（中心 + 四个卫星按钮），移开还原。
-/// 几何换算见 `crate::ballhub`：形状中心不动是硬要求。
+/// 诊断：把前端遇到的问题写进 Rust 日志（悬浮球这种没有控制台的窗口用它）
 #[tauri::command]
-pub fn set_ball_expanded(app: AppHandle, expanded: bool) -> Result<[i32; 2], String> {
-    crate::ballhub::set_expanded(&app, expanded)?;
-    // 一次 IPC 就把补偿量带回去：多查一次命令会让前端多一个 await，
-    // 期间 hovered 可能已经变了，窗口撑开而 CSS 没跟上
-    let (x, y) = crate::ballhub::wheel_shift(&app);
-    if expanded && (x != 0 || y != 0) {
-        log::info!("展开位移补偿：球要反向偏移 ({x}, {y}) 物理像素");
-    }
-    Ok([x, y])
+pub fn frontend_log(scope: String, message: String) {
+    log::warn!("[前端 {scope}] {message}");
 }
 
-/// 临时诊断：前端把「为什么要收起轮盘」写进日志。
+/// 前端挂载时先拉一次快照（**先 listen 再拉**，靠 `rev` 保证不会被旧快照盖掉）。
 #[tauri::command]
-pub fn ball_trace(reason: String) {
-    log::info!("悬浮球收起原因：{reason}");
+pub fn ball_snapshot(app: AppHandle) -> crate::ballhub::BallSnapshot {
+    crate::ballhub::snapshot(&app)
 }
 
-/// 光标此刻是否真的在悬浮球窗口内。
+/// 展开 / 收起 HUD 轮盘。
 ///
-/// 用来区分「用户真的把鼠标移开了」和「窗口自己重定位造成的假 leave」：
-/// 窗口一改尺寸/位置，Chromium 会派一次 `pointerleave`，但因为指针没动，
-/// **不会再补 `pointerover`** —— 前端光靠事件永远分不清这两种情况
-/// （实测后果：轮盘展开即被收回，鼠标还在球上又展开，一秒一轮地闪）。
-///
-/// 用 Win32 `GetCursorPos` 而不是 Tauri 的 `cursor_position()`：后者实测返回的
-/// 不是屏幕物理坐标（拿到的 y 差了 200+ px），判断必然错。这里直接 FFI 到 user32，
-/// 也就不必为这一个函数引入 windows crate。
+/// 一次调用就把窗口几何摆好，返回值是**摆好之后**的快照：前端拿它直接切 CSS，
+/// 不用再查一次（多一次 IPC 就多一段「窗口已经变了、CSS 还没跟上」的空窗）。
 #[tauri::command]
-pub fn ball_cursor_inside(app: AppHandle) -> bool {
-    use tauri::Manager;
-    let Some(win) = app.get_webview_window("ball") else {
-        return false;
-    };
-    let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) else {
-        return false;
-    };
-    let Some((cx, cy)) = cursor_screen_pos() else {
-        // 拿不到光标位置时保持现状（宁可多撑一会儿，也别把轮盘闪掉）
-        return true;
-    };
-    let inside = cx >= pos.x
-        && cx <= pos.x + size.width as i32
-        && cy >= pos.y
-        && cy <= pos.y + size.height as i32;
-    log::info!(
-        "光标判定：cursor=({cx}, {cy}) 窗口=({}, {}) {}×{} → inside={inside}",
-        pos.x,
-        pos.y,
-        size.width,
-        size.height
-    );
-    inside
+pub fn set_ball_wheel(app: AppHandle, open: bool) -> Result<crate::ballhub::BallSnapshot, String> {
+    crate::ballhub::set_wheel(&app, open)
 }
 
-#[repr(C)]
-struct RawPoint {
-    x: i32,
-    y: i32,
-}
-
-unsafe extern "system" {
-    fn GetCursorPos(lp_point: *mut RawPoint) -> i32;
-}
-
-/// 光标在虚拟屏幕上的物理坐标（多显示器时为全局坐标，与 `outer_position` 同一坐标系）
-fn cursor_screen_pos() -> Option<(i32, i32)> {
-    let mut pt = RawPoint { x: 0, y: 0 };
-    // SAFETY: GetCursorPos 只往我们提供的结构体里写，指针有效
-    if unsafe { GetCursorPos(&mut pt) } == 0 {
-        return None;
-    }
-    Some((pt.x, pt.y))
+/// 光标此刻是否真的在悬浮入口里（ball ∪ wheel）。
+///
+/// 用来区分「用户真的把鼠标移开了」和「窗口自己动了一下造成的假 leave」：
+/// 窗口改尺寸 / 位置时 Chromium 会派一次 `pointerleave`，但因为指针没动，
+/// **不会再补 `pointerover`** —— 前端光靠事件永远分不清（实测后果：轮盘展开即被收回，
+/// 鼠标还在球上又展开，一秒一轮地闪）。
+#[tauri::command]
+pub fn hub_cursor_inside(app: AppHandle) -> bool {
+    crate::ballhub::cursor_inside_hub(&app)
 }
 
 /// 切「贴边胶囊 ↔ 常规球」。胶囊上 hover / 单击都会走到这里（稿子里的「唤出常规态」），
-/// 形态显式落盘，下次启动就照它还原。
+/// 形态显式落盘，下次启动就照它还原（窗口尺寸已经恒定，靠尺寸反推不出来了）。
 #[tauri::command]
-pub fn set_ball_docked(
-    app: AppHandle,
-    state: State<'_, SettingsState>,
-    docked: bool,
-) -> Result<(), String> {
-    let effective = crate::ballhub::set_docked(&app, docked)?;
-    persist_ball_form(&app, state, effective)
-}
-
-/// **拖动结束**时调用：按落点决定形态（靠边吸成胶囊），并把最终几何写回设置。
-///
-/// 位置上报（`save_ball_position`）只记坐标、不判形态：常规球被钳进可视区后左边缘
-/// 同样贴着屏幕，拿坐标反推形态会把刚唤出来的常规态吸回胶囊。
-#[tauri::command]
-pub fn finish_ball_drag(
-    app: AppHandle,
-    state: State<'_, SettingsState>,
-) -> Result<(), String> {
-    let docked = crate::ballhub::dock(&app)?;
-    persist_ball_form(&app, state, docked)
-}
-
-/// 只记悬浮球坐标（拖动过程中前端会节流上报），不动形态
-#[tauri::command]
-pub fn save_ball_position(
-    app: AppHandle,
-    state: State<'_, SettingsState>,
-    x: i32,
-    y: i32,
-) -> Result<(), String> {
-    // 展开态下窗口是按形状中心重新定位过的，此时的左上角不是「悬浮球的位置」；
-    // 存下去下次启动就会从偏移过的位置冒出来（程序自己挪窗也会触发 onMoved）
-    if crate::ballhub::is_expanded(&app) {
-        log::debug!("忽略展开态下的悬浮球位置上报: ({x}, {y})");
-        return Ok(());
+pub fn set_ball_docked(app: AppHandle, docked: bool) -> Result<crate::ballhub::BallSnapshot, String> {
+    let snap = crate::ballhub::set_form(&app, docked)?;
+    if let Err(err) = crate::ballhub::persist(&app) {
+        log::warn!("保存悬浮球形态失败: {err}");
     }
-    // 吸附发生在 `finish_ball_drag` 里（拖动结束那一刻），这里只照当前真实位置落盘：
-    // 形状切来切去也会触发 onMoved，顺手把新位置存住
-    let pos = app
-        .get_webview_window("ball")
-        .and_then(|ball| ball.outer_position().ok())
-        .unwrap_or(tauri::PhysicalPosition::new(x, y));
-
-    save_position(&app, state, |s| {
-        s.ball_x = Some(pos.x);
-        s.ball_y = Some(pos.y);
-    })
+    Ok(snap)
 }
 
-/// 形态 + 当前左上角一起落盘（形态一变位置也跟着变，两个字段要一起写）
-fn persist_ball_form(
-    app: &AppHandle,
-    state: State<'_, SettingsState>,
-    docked: bool,
-) -> Result<(), String> {
-    let pos = app
-        .get_webview_window("ball")
-        .and_then(|ball| ball.outer_position().ok());
-    save_position(app, state, |s| {
-        s.ball_docked = docked;
-        if let Some(pos) = pos {
-            s.ball_x = Some(pos.x);
-            s.ball_y = Some(pos.y);
-        }
-    })
+/// **拖动开始**时调用（原生拖动之前）：起一个看门狗线程，按真实的左键状态判定松手，
+/// 松手后自己做吸附判定。不能只靠前端 `startDragging().then(...)` —— 模态移动循环里
+/// 那条 Promise 什么时候落地说不准（实测会漏掉、拖到边上不贴边）。
+#[tauri::command]
+pub fn begin_ball_drag(app: AppHandle) {
+    crate::ballhub::begin_drag(&app);
+}
+
+/// **拖动结束**时调用：按落点决定形态（靠边就吸成胶囊），并把最终几何写回设置。
+///
+/// 这是全项目**唯一**判定吸附的地方 —— 挂在位置上报上会把刚唤出来的常规态吸回去
+/// （常规球被钳进可视区后左边缘同样贴着屏幕）。
+#[tauri::command]
+pub fn finish_ball_drag(app: AppHandle) -> Result<crate::ballhub::BallSnapshot, String> {
+    let snap = crate::ballhub::finish_drag(&app)?;
+    if let Err(err) = crate::ballhub::persist(&app) {
+        log::warn!("保存悬浮球位置失败: {err}");
+    }
+    Ok(snap)
 }
 
 #[tauri::command]
@@ -489,6 +447,31 @@ fn write_to_clipboard(app: &AppHandle, clip: &Clip) -> Result<(), String> {
             ctx.set_image(image)
                 .map_err(|e| format!("写入剪贴板失败: {e}"))
         }
+        ClipKind::File => {
+            // 已经不在磁盘上的路径要剔掉：资源管理器粘贴到一个不存在的路径会整个失败，
+            // 用户看到的是「复制了但粘不出来」。剔完还剩就照常写。
+            let files: Vec<String> = clip
+                .files
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|path| std::path::Path::new(path).exists())
+                .collect();
+
+            if files.is_empty() {
+                return Err("这些文件都已经不在原来的位置了".to_string());
+            }
+            if files.len() < clip.files.as_ref().map(Vec::len).unwrap_or(0) {
+                log::info!("{} 个文件已不存在，已跳过", files.len());
+            }
+
+            // 抑制用的指纹必须与监听线程算的一致：同一个归一化 + 同一个序列化
+            let normalized = util::normalize_files(&files);
+            app.state::<SelfWrite>()
+                .mark_written(util::files_key(&normalized));
+            ctx.set_files(normalized)
+                .map_err(|e| format!("写入剪贴板失败: {e}"))
+        }
     }
 }
 
@@ -504,6 +487,10 @@ pub async fn create_pin(app: AppHandle, clip_id: i64) -> Result<Pin, String> {
 
 pub(crate) fn create_pin_impl(app: &AppHandle, clip_id: i64) -> Result<Pin, String> {
     let clip = app.state::<Storage>().get(clip_id)?;
+    // 文件条目没有可画的像素：`text` 里是路径的 JSON，贴到桌面只会是一屏方括号引号
+    if clip.kind == ClipKind::File {
+        return Err("文件条目不支持贴到桌面".to_string());
+    }
     let (x, y, w, h, zoom) = pins::default_geometry(app, &clip);
 
     let pin = {

@@ -2,7 +2,14 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import type { AppSettings, Clip, ClipStats, KindFilter, Pin } from "./types";
+import type {
+  AppSettings,
+  BallSnapshot,
+  Clip,
+  ClipStats,
+  KindFilter,
+  Pin,
+} from "./types";
 
 /**
  * 后端命令的类型化包装。
@@ -20,6 +27,12 @@ export const api = {
   togglePanel: () => invoke<void>("toggle_panel"),
   showPanel: () => invoke<void>("show_panel"),
   hidePanel: () => invoke<void>("hide_panel"),
+  /**
+   * 面板「桌面置顶」开关：同时改窗口的 always_on_top 与落盘设置。
+   * 关掉之后面板会在失焦时自动收起（Rust 侧 `WindowEvent::Focused`）。
+   */
+  setPanelPinned: (pinned: boolean) =>
+    invoke<void>("set_panel_pinned", { pinned }),
   hideBall: () => invoke<void>("hide_ball"),
   showBall: () => invoke<void>("show_ball"),
   /** 悬浮球当前是否可见（设置页的开关如实反映状态） */
@@ -30,24 +43,38 @@ export const api = {
   /** 设置变化（任何窗口改了设置都会广播，悬浮球据此实时改不透明度） */
   onSettingsChanged: (handler: () => void) =>
     listen("settings:changed", () => handler()),
-  /** 悬停枢纽态：Rust 按「形状中心不动」撑成 HUD 轮盘（见 src-tauri/src/ballhub.rs） */
-  /** 展开 / 收回枢纽态；返回展开时窗口被钳进屏幕的位移（物理像素 `[dx, dy]`，收起恒为 0） */
-  setBallExpanded: (expanded: boolean) =>
-    invoke<[number, number]>("set_ball_expanded", { expanded }),
-  /** 光标是否真的在悬浮球窗口里（分辨「真移开」和「窗口重定位造成的假 leave」） */
-  ballCursorInside: () => invoke<boolean>("ball_cursor_inside"),
-  /** 临时诊断：把收起轮盘的原因写进 Rust 日志 */
-  ballTrace: (reason: string) => invoke<void>("ball_trace", { reason }),
-  /** 切「贴边胶囊 ↔ 常规球」（胶囊上鼠标一放上去 + 单击都走这里） */
-  setBallDocked: (docked: boolean) =>
-    invoke<void>("set_ball_docked", { docked }),
+  /** 诊断：把前端遇到的问题写进 Rust 日志（这两扇窗没有可看的控制台） */
+  frontendLog: (scope: string, message: string) =>
+    invoke<void>("frontend_log", { scope, message }),
+
+  /**
+   * 悬浮入口的几何 / 形态（真相在 Rust 侧 `ballhub.rs`：窗口尺寸恒定、锚点定位置）。
+   *
+   * 挂载顺序必须是「先 `onBallForm` 订阅，再 `ballSnapshot` 拉一次」：事件可能在
+   * 订阅与拉取之间到达，靠 `rev` 单调递增把旧快照挡掉。
+   */
+  ballSnapshot: () => invoke<BallSnapshot>("ball_snapshot"),
+  onBallForm: (handler: (snap: BallSnapshot) => void) =>
+    listen<BallSnapshot>("ball:form", (event) => handler(event.payload)),
+  /** 展开 / 收起 HUD 轮盘（一次调用把窗口几何摆好，返回摆好之后的快照） */
+  setBallWheel: (open: boolean) =>
+    invoke<BallSnapshot>("set_ball_wheel", { open }),
+  /** 光标是否真的还在悬浮入口（球 ∪ 轮盘）里 —— 分辨「真移开」和「窗口动一下的假 leave」 */
+  hubCursorInside: () => invoke<boolean>("hub_cursor_inside"),
+  /** 切「贴边胶囊 ↔ 常规球」（胶囊上悬停 / 单击都走这里） */
+  setBallForm: (docked: boolean) =>
+    invoke<BallSnapshot>("set_ball_docked", { docked }),
+  /**
+   * 拖动开始：让 Rust 起一个看门狗，按真实的左键状态判定「松手了没有」，松手后自己做
+   * 吸附判定。**必须在 `startDragging()` 之前发**，而且不要等它返回 —— 原生移动循环
+   * 一起来，主线程就被占住了，等它反而会把拖动推迟。
+   */
+  beginBallDrag: () => invoke<void>("begin_ball_drag"),
   /** 拖动结束：让 Rust 按落点决定是不是吸成胶囊（位置上报本身不改形态） */
-  finishBallDrag: () => invoke<void>("finish_ball_drag"),
+  finishBallDrag: () => invoke<BallSnapshot>("finish_ball_drag"),
   /** 订阅面板显示 / 隐藏（悬浮球标签上的「新条目」角标据此归零） */
   onPanelVisible: (handler: (visible: boolean) => void) =>
     listen<boolean>("panel:visible", (event) => handler(event.payload)),
-  saveBallPosition: (x: number, y: number) =>
-    invoke<void>("save_ball_position", { x, y }),
   savePanelPosition: (x: number, y: number) =>
     invoke<void>("save_panel_position", { x, y }),
   showBallMenu: () => invoke<void>("show_ball_menu"),

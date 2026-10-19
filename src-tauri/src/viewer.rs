@@ -125,6 +125,8 @@ fn view_size(clip: &Clip) -> (u32, u32) {
             )
         }
         ClipKind::Text => (TEXT_VIEW_W, TEXT_VIEW_H),
+        // 文件条目：路径列表按文本卡片展示（一屏够看十几条路径）
+        ClipKind::File => (TEXT_VIEW_W, TEXT_VIEW_H),
     }
 }
 

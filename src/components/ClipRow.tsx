@@ -1,7 +1,7 @@
 import { memo } from "react";
 
 import { assetUrl } from "../api";
-import { IconCopy, IconImage, IconPin, IconText, IconTrash } from "./icons";
+import { IconCopy, IconFile, IconFloatCard, IconImage, IconText, IconTrash } from "./icons";
 import type { Clip } from "../types";
 
 interface Props {
@@ -12,7 +12,7 @@ interface Props {
   now: number;
   /** 这条正在等第二次点击确认删除 */
   confirming: boolean;
-  /** 这条已经贴在桌面上了（图钉按钮点亮，再点=取消贴图） */
+  /** 这条已经贴在桌面上了（浮窗按钮点亮，再点=取消贴图） */
   pinned: boolean;
   onClick: (clip: Clip) => void;
   onCopy: (clip: Clip) => void;
@@ -87,15 +87,22 @@ function ClipRow({
       ? assetUrl(dataDir, clip.thumbRel)
       : null;
   const isImage = clip.kind === "image";
+  const isFile = clip.kind === "file";
   const size = formatBytes(clip.bytes);
   const when = formatWhen(clip.lastUsedAt, now);
+  /** 第二行 meta 的第一段：各类型各说各的重点 */
+  const metaLead = isImage
+    ? `${clip.width ?? "?"}×${clip.height ?? "?"} · ${size}`
+    : isFile
+      ? `${clip.files?.length ?? 0} 个文件 · ${size}`
+      : `${clip.text?.length ?? clip.preview.length} chars`;
 
   return (
     <div
       role="button"
       tabIndex={0}
       className={`clip-row${active ? " is-active" : ""}`}
-      title={`单击查看完整内容 · 右侧按钮复制 / 贴图 / 删除 · 右键更多\n创建：${formatFull(clip.createdAt)}\n最后使用：${formatFull(clip.lastUsedAt)}`}
+      title={`单击查看完整内容 · 右侧按钮复制${isFile ? " / 删除" : " / 贴图 / 删除"} · 右键更多\n创建：${formatFull(clip.createdAt)}\n最后使用：${formatFull(clip.lastUsedAt)}`}
       onClick={() => onClick(clip)}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -103,11 +110,19 @@ function ClipRow({
       }}
     >
       <div className="clip-row-body">
+        {/* 类型块 40×40：三种类型图标按**视觉重量**配尺寸（方形相框比三行文字重，
+            所以图片给 20、文本与折角纸给 18），不是随手写的数字 —— 改之前先并排看一眼 */}
         <div
           className={`clip-kind${isImage ? " clip-kind--image" : ""}`}
-          title={isImage ? "图片" : "文本"}
+          title={isImage ? "图片" : isFile ? "文件" : "文本"}
         >
-          {isImage ? <IconImage size={20} /> : <IconText size={18} />}
+          {isImage ? (
+            <IconImage size={20} />
+          ) : isFile ? (
+            <IconFile size={18} />
+          ) : (
+            <IconText size={18} />
+          )}
         </div>
 
         <div className="clip-main">
@@ -129,10 +144,7 @@ function ClipRow({
 
           <div className="clip-meta">
             <div className="clip-meta-line">
-              {/* 文本条目没有图片字节，别显示「0 B」；用真实字数（列表带全文） */}
-              {isImage
-                ? `${clip.width ?? "?"}×${clip.height ?? "?"} · ${size}`
-                : `${clip.text?.length ?? clip.preview.length} chars`}
+              {metaLead}
               {clip.useCount > 1 && ` · 用过 ${clip.useCount} 次`}
             </div>
             <div className="clip-meta-time">{when}</div>
@@ -154,19 +166,22 @@ function ClipRow({
           <IconCopy size={14} />
         </button>
 
-        <button
-          type="button"
-          className={`clip-action clip-action--pin${pinned ? " is-on" : ""}`}
-          title={pinned ? "取消贴图" : "贴到桌面"}
-          aria-label={pinned ? "取消贴图" : "贴到桌面"}
-          aria-pressed={pinned}
-          onClick={(e) => {
-            e.stopPropagation();
-            onPin(clip);
-          }}
-        >
-          <IconPin size={14} />
-        </button>
+        {/* 文件条目没有可画的像素，贴到桌面只会是一屏路径字符串 —— 后端也会拒，这里干脆不给入口 */}
+        {!isFile && (
+          <button
+            type="button"
+            className={`clip-action clip-action--pin${pinned ? " is-on" : ""}`}
+            title={pinned ? "取消贴图" : "贴到桌面"}
+            aria-label={pinned ? "取消贴图" : "贴到桌面"}
+            aria-pressed={pinned}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPin(clip);
+            }}
+          >
+            <IconFloatCard size={14} />
+          </button>
+        )}
 
         <button
           type="button"

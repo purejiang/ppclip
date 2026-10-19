@@ -16,8 +16,9 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
             }),
             "panel" => crate::show_panel(app),
             "hide" => {
-                if let Some(ball) = app.get_webview_window("ball") {
-                    let _ = ball.hide();
+                // 轮盘也得一起收：只藏球的话，那扇 232×232 的置顶窗会留在屏幕上
+                if let Err(err) = crate::ballhub::hide(app) {
+                    log::warn!("隐藏悬浮球失败: {err}");
                 }
             }
             "quit" => {

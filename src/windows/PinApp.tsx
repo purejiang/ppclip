@@ -99,8 +99,18 @@ export default function PinApp() {
           onError={() => setFailed(true)}
         />
       ) : (
-        <div className="pin-text" data-tauri-drag-region>
-          {failed ? "贴图内容已丢失" : (clip?.text ?? clip?.preview ?? "…")}
+        /* 文本贴图：文字要能选中复制，所以**不能**把 drag-region 挂在文字上
+           （挂了的话鼠标按下就被接管成拖窗，一个字都选不中）——
+           拖动改走顶部那条 grip，图片贴图仍整张可拖 */
+        <div className="pin-body">
+          <div className="pin-grip" data-tauri-drag-region title="拖动移动贴图">
+            <span className="pin-grip-dot" />
+            <span className="pin-grip-dot" />
+            <span className="pin-grip-dot" />
+          </div>
+          <div className="pin-text">
+            {failed ? "贴图内容已丢失" : (clip?.text ?? clip?.preview ?? "…")}
+          </div>
         </div>
       )}
     </div>

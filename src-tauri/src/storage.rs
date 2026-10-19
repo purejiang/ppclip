@@ -178,6 +178,54 @@ impl Storage {
         Ok(outcome)
     }
 
+    /// 文件条目入库（kind = file）。
+    ///
+    /// 路径列表序列化成 JSON 存进 `text` 列：这样搜索（`text LIKE ?`）能直接命中文件名，
+    /// 也不用为「一组文件」单开表 / 加列。`bytes` 记所有文件大小之和，
+    /// 只用于界面显示「总共多大」，**不参与图片容量淘汰**（那条只统计 kind = 'image'）。
+    pub fn upsert_files(&self, paths: &[String], source: &str) -> Result<UpsertOutcome, String> {
+        let paths = util::normalize_files(paths);
+        if paths.is_empty() {
+            return Err("没有可记录的文件".to_string());
+        }
+
+        let payload = util::files_payload(&paths);
+        let hash = util::files_key(&paths);
+        let preview = util::files_preview(&paths);
+        let bytes: i64 = paths
+            .iter()
+            .filter_map(|path| fs::metadata(path).ok())
+            .map(|meta| meta.len() as i64)
+            .sum();
+        let now = util::now_rfc3339();
+
+        let mut conn = self.lock();
+        let tx = conn.transaction().map_err(db_err)?;
+
+        let existing = find_by_hash(&tx, &hash)?;
+        let outcome = match existing {
+            Some(id) => {
+                bump(&tx, id, &now)?;
+                UpsertOutcome { id, created: false }
+            }
+            None => {
+                tx.execute(
+                    "INSERT INTO clips (kind, hash, text, preview, bytes, source, created_at, last_used_at, use_count)
+                     VALUES ('file', ?1, ?2, ?3, ?4, ?5, ?6, ?6, 1)",
+                    params![hash, payload, preview, bytes, source, now],
+                )
+                .map_err(db_err)?;
+                UpsertOutcome {
+                    id: tx.last_insert_rowid(),
+                    created: true,
+                }
+            }
+        };
+
+        tx.commit().map_err(db_err)?;
+        Ok(outcome)
+    }
+
     /// 置顶一条已有条目（点击复制时调用）
     pub fn touch(&self, id: i64) -> Result<(), String> {
         let conn = self.lock();
@@ -297,6 +345,7 @@ impl Storage {
             "SELECT COUNT(*),
                     COALESCE(SUM(CASE WHEN kind = 'text' THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN kind = 'image' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN kind = 'file' THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN kind = 'image' THEN bytes ELSE 0 END), 0)
              FROM clips",
             [],
@@ -305,7 +354,8 @@ impl Storage {
                     total: r.get(0)?,
                     text_count: r.get(1)?,
                     image_count: r.get(2)?,
-                    image_bytes: r.get(3)?,
+                    file_count: r.get(3)?,
+                    image_bytes: r.get(4)?,
                 })
             },
         )
@@ -576,10 +626,26 @@ fn pinned_clip_ids(conn: &Connection) -> Result<HashSet<i64>, String> {
 
 fn row_to_clip(row: &Row<'_>) -> rusqlite::Result<Clip> {
     let kind_raw: String = row.get("kind")?;
+    let kind = ClipKind::parse(&kind_raw).unwrap_or(ClipKind::Text);
+    let text: Option<String> = row.get("text")?;
+
+    // 文件条目的路径列表就是 `text` 里的 JSON。解析失败（旧数据 / 手工改库）时给空数组，
+    // 宁可显示「0 个文件」也不要整个列表读不出来。
+    let files = if kind == ClipKind::File {
+        Some(
+            text.as_deref()
+                .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+                .unwrap_or_default(),
+        )
+    } else {
+        None
+    };
+
     Ok(Clip {
         id: row.get("id")?,
-        kind: ClipKind::parse(&kind_raw).unwrap_or(ClipKind::Text),
-        text: row.get("text")?,
+        kind,
+        text,
+        files,
         preview: row.get("preview")?,
         image_rel: row.get("image_rel")?,
         thumb_rel: row.get("thumb_rel")?,
@@ -761,6 +827,52 @@ mod tests {
         assert_eq!(clip.source, "screenshot");
         assert_eq!(clip.preview, "[图片 10×10]");
 
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn file_entries_round_trip_paths_instead_of_json() {
+        let (storage, dir) = temp_storage();
+
+        // 真实文件：bytes 要能算出来
+        let real = dir.join("报告.docx");
+        fs::write(&real, b"hello").unwrap();
+        let real_str = real.to_string_lossy().to_string();
+
+        let paths = vec![real_str.clone(), "D:\\不存在.png".to_string()];
+        let first = storage.upsert_files(&paths, "clipboard").unwrap();
+        assert!(first.created);
+        assert_eq!(storage.count(), 1);
+
+        let clip = storage.get(first.id).unwrap();
+        assert_eq!(clip.kind, ClipKind::File);
+        assert_eq!(clip.files.as_deref(), Some(paths.as_slice()));
+        assert_eq!(clip.bytes, 5, "只统计真实存在的那一个文件");
+        assert_eq!(clip.preview, "报告.docx 等 2 个文件");
+        // 路径原样留在 text 里 → 搜索文件名能命中
+        assert!(clip.text.as_deref().unwrap().contains("报告.docx"));
+
+        // 同一组文件（大小写不同、顺序相同）再入一次 → 只置顶不重复
+        let again = storage
+            .upsert_files(&[real_str.to_uppercase(), "D:\\不存在.png".to_string()], "clipboard")
+            .unwrap();
+        assert!(!again.created);
+        assert_eq!(again.id, first.id);
+
+        let stats = storage.stats().unwrap();
+        assert_eq!(stats.file_count, 1);
+        assert_eq!(stats.text_count, 0);
+        assert_eq!(storage.list(None, Some(ClipKind::File), 50, 0).unwrap().len(), 1);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn empty_file_list_is_rejected() {
+        let (storage, dir) = temp_storage();
+        assert!(storage.upsert_files(&[], "clipboard").is_err());
+        assert!(storage.upsert_files(&["   ".to_string()], "clipboard").is_err());
+        assert_eq!(storage.count(), 0);
         cleanup(&dir);
     }
 
