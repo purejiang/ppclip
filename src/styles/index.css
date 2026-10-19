@@ -19,7 +19,8 @@
  * 三条规矩（改样式先看这里）：
  * 1. **窗口 = 一张圆角玻璃卡片**：`rounded-2xl bg-surface/85 backdrop-blur-2xl` +
  *    `border-outline-variant/30`。窗口外面的桌面 WebView2 糊不到，所以「玻璃」的透视感
- *    只来自半透明；页内叠玻璃（弹层 / 输入框）才是真模糊。
+ *    只来自半透明；页内叠玻璃（弹层 / 输入框）才是真模糊。面板这扇窗的底色由设置里的
+ *    「面板不透明度」接管（100% = 实心，往下拖才回到 85% 的玻璃感，见下方 `--panel-*`）。
  * 2. **每扇窗的 main 里都有两张发光斑**：右上 `primary/10`、左下 `tertiary/10`，
  *    尺寸 160/144、`blur-3xl` —— 稿子里最明显的氛围光，别省。
  * 3. 字号只有四档：12（正文/品牌）· 11（筛选/按钮/路径）· 10（meta）· 9（角标），
@@ -163,6 +164,11 @@ html[data-window="overlay"] #root {
   min-width: 32px;
 }
 
+/* 右侧那组：最右边固定是关闭按钮，置顶排在它前面 */
+.app-header-side--end {
+  justify-content: flex-end;
+}
+
 .app-brand {
   position: absolute;
   left: 50%;
@@ -229,6 +235,37 @@ html[data-window="overlay"] #root {
 .app-header-button.is-on {
   color: var(--tertiary);
   background: rgb(var(--tertiary-rgb) / 16%);
+}
+
+/* 面板不透明度（设置里可调）：只缩放这几层玻璃的**底色**透明度，文字 / 图标保持不透明。
+   用整窗 opacity 会把 12px 中文压成灰雾，看不清；桌面也糊不到（见设计决策 14），
+   所以「更透」只能靠降底色 alpha。变量只在 main 上定义，查看窗口 / 贴图不受影响。
+   卡片底色**以 100% 为基数**：滑杆拉到 100 时面板完全不透明 —— 85% 的玻璃底在桌面上
+   仍会透出来（用户反馈「100% 还是有点透」）；想要玻璃感往下拖即可。 */
+html[data-window="main"] {
+  --panel-opacity: 1;
+  --panel-card-alpha: calc(100% * var(--panel-opacity));
+  --panel-header-alpha: calc(70% * var(--panel-opacity));
+  --panel-status-alpha: calc(90% * var(--panel-opacity));
+  --panel-footer-alpha: calc(80% * var(--panel-opacity));
+  --panel-border-alpha: calc(30% * var(--panel-opacity));
+}
+
+html[data-window="main"] .app-card {
+  background: rgb(var(--surface) / var(--panel-card-alpha));
+  border-color: rgb(var(--outline-variant) / var(--panel-border-alpha));
+}
+
+html[data-window="main"] .app-header {
+  background: rgb(var(--surface-container-low) / var(--panel-header-alpha));
+}
+
+html[data-window="main"] .panel-status {
+  background: rgb(var(--surface-container-low) / var(--panel-status-alpha));
+}
+
+html[data-window="main"] .app-footer {
+  background: rgb(var(--surface-container-lowest) / var(--panel-footer-alpha));
 }
 
 /* 顶部居中的提示条（稿子里的 toast）：复制 / 贴图之后给一次反馈 */
@@ -322,6 +359,27 @@ html[data-window="overlay"] #root {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* 查看窗口页脚左侧：MIME + 创建时间（都是「这条内容的事实」）。
+   右端只留 Esc 提示，所以这里必须可收缩：窗口拖窄时截左边文字（省略号），
+   而不是把 Esc 挤出可视区。面板页脚不用这个类。 */
+.app-footer-facts {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app-footer-facts > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 圆点与右端的快捷键提示都不参与收缩 */
+.app-footer-facts > .app-footer-dot,
+.app-footer > .app-footer-group:last-child {
+  flex: 0 0 auto;
 }
 
 .app-footer-dot {
@@ -1425,51 +1483,259 @@ input[type="range"].slider::-webkit-slider-thumb {
   overflow: auto;
 }
 
-/* 文件条目详情：一行一个文件（图标 + 文件名 + 所在目录），不是文本 pre */
-.viewer-files {
+/* 文件条目详情（照 stitch 稿「CLIPBOARD DETAIL」）：
+   文件卡（类型 + 文件名 + 复制文件名）→ 格式 / 大小 / 修改时间三格 →
+   绝对路径块（复制路径 / 在文件夹中打开）→ SHA-256 块（按需计算）。
+   多文件时退化成「总览卡 + 一行一个文件」，每行照样能复制路径 / 定位。
+   全部字段都是现场读的（`file_details`），删过 / 挪过的文件会标「已不在原位置」。 */
+.file-detail {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
   width: 100%;
   padding: 10px;
   user-select: text;
 }
 
-.viewer-file-row {
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgb(var(--outline-variant) / 24%);
+  border-radius: 12px;
+  background: rgb(var(--surface-container) / 55%);
+}
+
+.file-card-icon {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgb(var(--primary-rgb) / 20%);
+  border-radius: 10px;
+  background: rgb(var(--primary-container) / 45%);
+  color: var(--primary);
+}
+
+.file-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.file-card-kind {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgb(var(--on-surface-variant) / 85%);
+  font-size: 10px;
+}
+
+/* 文件已不在原位置：标题旁一枚小红标，比整张卡变红克制得多 */
+.file-card-missing {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgb(var(--error-rgb) / 14%);
+  color: var(--on-error-container);
+  font-size: 9px;
+}
+
+.file-card-name {
+  overflow: hidden;
+  color: var(--on-surface);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.file-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.file-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid rgb(var(--outline-variant) / 20%);
+  border-radius: 10px;
+  background: rgb(var(--surface-container) / 45%);
+}
+
+.file-fact-label {
+  color: rgb(var(--on-surface-variant) / 85%);
+  font-size: 10px;
+}
+
+.file-fact-value {
+  overflow: hidden;
+  color: var(--on-surface);
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.file-fact-value--accent {
+  color: var(--primary);
+}
+
+.file-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid rgb(var(--outline-variant) / 20%);
+  border-radius: 10px;
+  background: rgb(var(--surface-container) / 50%);
+}
+
+.file-block-label {
+  color: rgb(var(--on-surface-variant) / 85%);
+  font-size: 10px;
+}
+
+.file-block-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.file-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 校验和：一行一个算法（SHA-256 / MD5），左边标签、中间等宽摘要、右边复制 */
+.file-hash-row {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 7px 10px;
-  border-radius: 8px;
-  background: rgb(var(--surface-container) / 55%);
 }
 
-.viewer-file-row svg {
+.file-hash-label {
+  flex: 0 0 52px;
+  color: rgb(var(--on-surface-variant) / 70%);
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.file-block-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex: 0 0 auto;
-  color: var(--on-surface-variant);
 }
 
-.viewer-file-name {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--on-surface);
-  font-size: 12px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.viewer-file-dir {
+/* 路径 / 校验和：超长一律截尾（从头看更有用），不玩 rtl 的截头 */
+.file-path,
+.file-hash {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: var(--on-surface-variant);
-  font-family: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
-  font-size: 10px;
-  text-align: right;
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 11px;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.file-path {
+  color: rgb(var(--on-surface) / 92%);
+}
+
+.file-hash {
+  color: var(--secondary);
+  letter-spacing: 0.02em;
+}
+
+/* 多文件：一行一个文件（格式标签 + 文件名 + 大小 + 复制路径 / 定位） */
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.file-list-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgb(var(--surface-container) / 45%);
+}
+
+.file-ext-badge {
+  flex: 0 0 auto;
+  min-width: 34px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgb(var(--surface-variant) / 70%);
+  color: var(--primary);
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 9px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.file-list-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--on-surface);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.file-list-size {
+  flex: 0 0 auto;
+  color: rgb(var(--on-surface-variant) / 80%);
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 10px;
+}
+
+.file-list-size.is-missing {
+  color: var(--on-error-container);
+}
+
+.file-icon-button {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  transition: color 150ms ease;
+}
+
+.file-icon-button:hover {
+  color: var(--primary);
+}
+
+.file-detail .ghost-button {
+  flex: 0 0 auto;
 }
 
 .viewer-files-empty {
@@ -1608,6 +1874,17 @@ input[type="range"].slider::-webkit-slider-thumb {
 
 .ball-orb:active {
   cursor: grabbing;
+}
+
+/* 命中区兜底：悬停唤出的球离屏幕边留 6px（Rust 侧 `UNDOCK_EDGE_INSET_LOGICAL`），
+ * 而光标还停在贴边胶囊上 —— 胶囊中心到球心只有 24px、球半径 26px，再大一点就点不到。
+ * 把命中区往外放 4px：视觉不变，悬停 / 点击更宽容（伪元素在 DOM 里先于内容，
+ * 不会挡住 `.ball-orb-body`）。 */
+.ball-orb::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
 }
 
 /* 呼吸光晕：稿子里有（`-inset-2.5 blur-md` 的主色雾），但实机看着就是一圈糊光，

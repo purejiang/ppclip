@@ -21,10 +21,29 @@ interface Props {
   onContextMenu: (clip: Clip) => void;
 }
 
+/**
+ * 字节数：MB 一位小数、100 KB 以上取整、更小的保留一位小数。
+ *
+ * 大文件稿子写 `2.4 MB`；十几 KB 的文件写成「5 KB」会让人觉得尺寸不准（实际 4.5 KB），
+ * 所以 100 KB 以下保留一位小数，`240 KB` 这种仍然干净。
+ */
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  if (bytes >= 100 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${bytes} B`;
+}
+
+/**
+ * 文件条目的扩展名标签（大写）：`C:\a\Q4_计划账单.pdf` → `PDF`。
+ * 走完整路径而不是列表预览（预览会被截断，长文件名会把扩展名截掉）；
+ * 没有扩展名 / 结尾是点 / 隐藏文件（`.gitignore`）一律给空串，不显示半个标签。
+ */
+function fileExt(path: string): string {
+  const name = path.split(/[\\/]/).pop() ?? path;
+  const cut = name.lastIndexOf(".");
+  if (cut <= 0 || cut === name.length - 1) return "";
+  return name.slice(cut + 1).toUpperCase();
 }
 
 /** 紧凑的相对时间：刚刚 / N 分钟前 / 今天 HH:MM / 昨天 HH:MM / MM-DD HH:MM / YYYY-MM-DD */
@@ -88,13 +107,20 @@ function ClipRow({
       : null;
   const isImage = clip.kind === "image";
   const isFile = clip.kind === "file";
+  const fileCount = clip.files?.length ?? 0;
   const size = formatBytes(clip.bytes);
   const when = formatWhen(clip.lastUsedAt, now);
+  /** 单个文件才挂类型标签（多个文件时那格留给「N 个文件」） */
+  const extChip =
+    isFile && fileCount === 1 ? fileExt(clip.files?.[0] ?? clip.preview) : "";
   /** 第二行 meta 的第一段：各类型各说各的重点 */
   const metaLead = isImage
     ? `${clip.width ?? "?"}×${clip.height ?? "?"} · ${size}`
     : isFile
-      ? `${clip.files?.length ?? 0} 个文件 · ${size}`
+      ? // 单个文件：类型标签已经在标题旁边，这里只说大小（照稿子的 `PDF 2.4 MB`）
+        fileCount > 1
+        ? `${fileCount} 个文件 · ${size}`
+        : size
       : `${clip.text?.length ?? clip.preview.length} chars`;
 
   return (
@@ -136,6 +162,11 @@ function ClipRow({
           ) : (
             <div className="clip-title-row">
               <span className="clip-text">{clip.preview}</span>
+              {extChip && (
+                <span className="clip-badge" title={`${extChip} 文件`}>
+                  {extChip}
+                </span>
+              )}
               {clip.source === "screenshot" && (
                 <span className="clip-badge">截图</span>
               )}

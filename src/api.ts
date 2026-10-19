@@ -7,6 +7,8 @@ import type {
   BallSnapshot,
   Clip,
   ClipStats,
+  FileDetail,
+  FileHashes,
   KindFilter,
   Pin,
 } from "./types";
@@ -95,6 +97,20 @@ export const api = {
   clearClips: (kind: KindFilter) =>
     invoke<number>("clear_clips", { kind: kind === "all" ? null : kind }),
   showClipMenu: (id: number) => invoke<void>("show_clip_menu", { id }),
+  /**
+   * 文件条目的现场元信息（大小 / 修改时间 / 是否还在）。
+   * **不落库**：打开详情时现场 stat，删过 / 挪过的文件会如实显示 `exists: false`。
+   */
+  fileDetails: (paths: string[]) => invoke<FileDetail[]>("file_details", { paths }),
+  /** 在资源管理器里定位文件（选中它） */
+  revealPath: (path: string) => invoke<void>("reveal_path", { path }),
+  /** 复制任意文本（文件名 / 路径 / 校验码）；后端会记 SelfWrite，不会多出一条历史 */
+  copyText: (text: string) => invoke<void>("copy_text", { text }),
+  /**
+   * 按需算文件的 SHA-256 + MD5（流式读一遍算两个，几百 MB 也不会卡主线程）。
+   * 不随详情一起算：大文件算一遍要好几秒，打开详情就卡住不合适。
+   */
+  fileHashes: (path: string) => invoke<FileHashes>("file_hashes", { path }),
   /** 历史或贴图有变化（后端广播，前端据此刷新列表 / 计数） */
   onClipsChanged: (handler: () => void) =>
     listen("clips:changed", () => handler()),

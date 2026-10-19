@@ -22,7 +22,8 @@ test = false
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+# tray-icon = 系统托盘入口（左键开合面板、右键原生菜单）
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -30,6 +31,9 @@ clipboard-rs = "0.3"
 xcap = "0.9"
 image = "0.25"
 sha2 = "0.10"
+# 详情卡同时给 SHA-256 与 MD5（稿子那屏写的是 MD5，和第三方 MD5 工具对得上；
+# 两者同一次读文件一起算，只多一个纯 Rust 依赖）
+md-5 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }

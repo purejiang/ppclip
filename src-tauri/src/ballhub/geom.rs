@@ -50,6 +50,17 @@ pub const WHEEL_PAD_LOGICAL: f64 = 16.0;
 /// **永远判不中**，这就是「拖到边上不吸」的真因。按形状边算，球边距边 ≤ 24 就吸，
 /// 与窗口被撑多宽无关。
 pub const DOCK_EDGE_MARGIN_LOGICAL: f64 = 24.0;
+/// 悬停唤出常规态时，形状离屏幕边留出的余量（逻辑像素）。
+///
+/// 为什么需要：贴边胶囊悬停变成常规球时，如果只钳到「球刚好整块在屏内」，球的右沿
+/// 会正好压在屏幕右沿上 —— 球环本身没被切，但右上角的新条目角标（向外挑 5px）、
+/// hover 时 `scale(1.05)` 的描边、那圈 `0 4px 12px` 的投影都会被屏幕边切掉，
+/// 看起来就是「球太靠边、右侧被挡住」。上下同理（角标在右上角）。
+///
+/// 为什么是 6：角标 5px + 1px 描边；再大就会让「光标停在胶囊中心」落到球的圆周上
+/// （球半径 26，胶囊中心距球心 `26 - inset`），所以前端给 `.ball-orb` 补了 4px 的
+/// 不可见命中区兜底。真机嫌挤只改这一个常量。
+pub const UNDOCK_EDGE_INSET_LOGICAL: f64 = 6.0;
 
 /// 显示器（或任意矩形）的物理范围
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,6 +258,23 @@ pub fn clamp_center(center: i32, start: i32, extent: i32, shape: i32) -> i32 {
     center.clamp(start + half, (start + extent - half).max(start + half))
 }
 
+/// 常规球的归一化：球整块在屏内，**而且四边各留 `inset_logical` 的余量**。
+///
+/// 用在「悬停唤出常规态 / 启动恢复 / DPI 变化」这些不走吸附判定的路径上：
+/// 贴边胶囊悬停出来的球如果压着屏幕边，角标 / hover 描边 / 投影就被切掉了
+/// （见 [`UNDOCK_EDGE_INSET_LOGICAL`]）。Tab 不走这里 —— 胶囊本来就要贴住边。
+///
+/// 显示器比「球 + 两侧余量」还小时余量自动作废（`extent` 至少留下球径），
+/// 不会算出 min > max 的区间。
+pub fn clamp_orb_inset(anchor: Anchor, mon: MonitorRect, scale: f64, inset_logical: f64) -> Anchor {
+    let (sw, sh) = shape_size(BallForm::Orb, scale);
+    let inset = to_physical(inset_logical, scale);
+    Anchor::new(
+        clamp_center(anchor.x, mon.x + inset, (mon.w - inset * 2).max(sw), sw),
+        clamp_center(anchor.y, mon.y + inset, (mon.h - inset * 2).max(sh), sh),
+    )
+}
+
 /// 拖动落在屏幕边缘附近了吗 —— **整个项目里唯一判定吸附的地方**。
 ///
 /// 判据是**当前形态的形状左右边**离屏幕边的空隙 ≤ `margin_logical`：
@@ -271,6 +299,50 @@ pub fn should_dock(
     let left_gap = (anchor.x - half) - mon.x;
     let right_gap = mon.right() - (anchor.x + half);
     left_gap <= margin || right_gap <= margin
+}
+
+/// 光标到形状**外接矩形**的距离（物理像素，切比雪夫距离；在矩形里为 0）。
+///
+/// 自动贴回（见 `ballhub::arm_redock`）用它判断「鼠标是不是真的离开球了」：
+/// 形状是圆的，但外接矩形足够判定「离开」，而且不受指针从哪个角离开影响。
+pub fn cursor_distance_to_shape(
+    cursor: (i32, i32),
+    anchor: Anchor,
+    form: BallForm,
+    scale: f64,
+) -> i32 {
+    let (sw, sh) = shape_size(form, scale);
+    let (half_w, half_h) = (sw / 2, sh / 2);
+    let dx = if cursor.0 < anchor.x - half_w {
+        anchor.x - half_w - cursor.0
+    } else if cursor.0 > anchor.x + half_w {
+        cursor.0 - (anchor.x + half_w)
+    } else {
+        0
+    };
+    let dy = if cursor.1 < anchor.y - half_h {
+        anchor.y - half_h - cursor.1
+    } else if cursor.1 > anchor.y + half_h {
+        cursor.1 - (anchor.y + half_h)
+    } else {
+        0
+    };
+    dx.max(dy)
+}
+
+/// 光标是不是已经**离开**形状：离外接矩形超过 `gap_logical`（换算成物理像素）。
+///
+/// 阈值不能太小：贴回胶囊后胶囊比球高出来 `(TAB_H - ORB)/2 = 6` 逻辑像素，
+/// 如果离开阈值 ≤ 6，贴回那一刻光标可能正好落在胶囊上，前端悬停又会把胶囊
+/// 唤回常规态 —— 来回闪。10 留了 4px 安全垫。
+pub fn cursor_off_shape(
+    cursor: (i32, i32),
+    anchor: Anchor,
+    form: BallForm,
+    scale: f64,
+    gap_logical: f64,
+) -> bool {
+    cursor_distance_to_shape(cursor, anchor, form, scale) > to_physical(gap_logical, scale)
 }
 
 /// 轮盘窗口应该摆在哪。
@@ -451,6 +523,81 @@ mod tests {
         assert_eq!(clamped.y, 32);
         let clamped = clamp_anchor(BallForm::Tab, DockSide::Left, Anchor::new(8, 2000), SCREEN, 1.0);
         assert_eq!(clamped.y, 1048);
+    }
+
+    /// 悬停唤出的常规球离屏幕边留 6px：角标 / hover 描边 / 投影不再被切
+    #[test]
+    fn undock_inset_keeps_the_orb_off_the_screen_edge() {
+        // 右贴边：胶囊中心 1912（= 1920 − 8）→ 球中心钳到 1920 − 26 − 6 = 1888
+        let right = clamp_orb_inset(Anchor::new(1912, 500), SCREEN, 1.0, 6.0);
+        assert_eq!(right.x, 1888);
+        assert_eq!(right.x + 26, 1914, "球右沿离屏幕右沿 6px");
+        // 左贴边对称：球左沿离屏幕左沿 6px
+        let left = clamp_orb_inset(Anchor::new(8, 500), SCREEN, 1.0, 6.0);
+        assert_eq!(left.x, 32);
+        assert_eq!(left.x - 26, 6);
+        // 屏幕中间不该被推走
+        assert_eq!(
+            clamp_orb_inset(Anchor::new(900, 500), SCREEN, 1.0, 6.0),
+            Anchor::new(900, 500)
+        );
+        // 贴顶的胶囊（中心 32）转球后同样留 6px：角标在右上角，上下也要留
+        let top = clamp_orb_inset(Anchor::new(900, 32), SCREEN, 1.0, 6.0);
+        assert_eq!(top.y, 32);
+        assert_eq!(top.y - 26, 6);
+        assert_eq!(
+            clamp_orb_inset(Anchor::new(900, 1048), SCREEN, 1.0, 6.0).y,
+            1048
+        );
+        // 光标仍停在胶囊中心：到球心 24 < 半径 26，还在球上（再大就会掉出圆周）
+        assert_eq!(
+            cursor_distance_to_shape((1912, 500), right, BallForm::Orb, 1.0),
+            0
+        );
+    }
+
+    /// 150% 缩放下余量同样按逻辑像素换算，球不会因为 DPI 变回压边
+    #[test]
+    fn undock_inset_scales_with_dpi() {
+        // 球 78、胶囊 24 宽 → 胶囊中心距边 12，球半径 39，inset 6 逻辑 = 9 物理
+        let a = clamp_orb_inset(Anchor::new(1920 - 12, 500), SCREEN, 1.5, 6.0);
+        assert_eq!(a.x, 1920 - 39 - 9);
+        assert_eq!(a.x + 39, 1920 - 9);
+    }
+
+    /// 自动贴回的「鼠标离开」判定：按形状外接矩形算，10 逻辑像素是阈值
+    #[test]
+    fn cursor_leave_gap_is_measured_from_the_shape_edge() {
+        let orb = BallForm::Orb;
+        let anchor = Anchor::new(900, 500); // 球 874..926 / 474..526
+        assert!(!cursor_off_shape((900, 500), anchor, orb, 1.0, 10.0));
+        assert!(
+            !cursor_off_shape((926, 500), anchor, orb, 1.0, 10.0),
+            "正好压在球边上不算离开"
+        );
+        assert!(
+            !cursor_off_shape((935, 500), anchor, orb, 1.0, 10.0),
+            "超出 9px 还不算离开"
+        );
+        assert!(
+            !cursor_off_shape((936, 500), anchor, orb, 1.0, 10.0),
+            "正好超出 10px 还不算离开（要严格大于）"
+        );
+        assert!(
+            cursor_off_shape((937, 500), anchor, orb, 1.0, 10.0),
+            "超出 11px 才算离开"
+        );
+        assert!(!cursor_off_shape((900, 536), anchor, orb, 1.0, 10.0));
+        assert!(cursor_off_shape((900, 537), anchor, orb, 1.0, 10.0));
+
+        // 贴边时胶囊中心离球心只有 24：光标停在整个胶囊上都不会判成离开
+        let docked_orb = clamp_orb_inset(Anchor::new(1912, 500), SCREEN, 1.0, 6.0);
+        for y in [468, 500, 532] {
+            assert!(
+                !cursor_off_shape((1912, y), docked_orb, orb, 1.0, 10.0),
+                "光标还在胶囊上（y={y}）就判成了离开"
+            );
+        }
     }
 
     /// **P1 回归测试**：吸附判定用形状的边，不用形状中心。

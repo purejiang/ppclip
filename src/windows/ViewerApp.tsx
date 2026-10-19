@@ -10,6 +10,7 @@ import {
   IconCopy,
   IconFile,
   IconFitScreen,
+  IconFolder,
   IconImage,
   IconFloatCard,
   IconScan,
@@ -19,28 +20,34 @@ import {
   IconZoomIn,
   IconZoomOut,
 } from "../components/icons";
-import type { Clip } from "../types";
+import type { Clip, FileDetail, FileHashes } from "../types";
 
 /** 放大 / 缩小的步进与范围 */
 const ZOOM_STEP = 1.25;
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 6;
 
+/**
+ * 字节数：MB 一位小数、100 KB 以上取整、更小的保留一位小数。
+ * 文件详情里十几 KB 的文件写成「5 KB」（实际 4.5 KB）会显得尺寸不准。
+ */
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  if (bytes >= 100 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${bytes} B`;
 }
 
-/** 文件条目：取路径最后一段做文件名 */
-function fileName(path: string): string {
-  return path.split(/[\\/]/).pop() || path;
-}
-
-/** 文件条目：去掉文件名后的所在目录 */
-function fileDir(path: string): string {
-  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
-  return cut > 0 ? path.slice(0, cut) : path;
+/** 修改时间：今年的 `MM-DD HH:MM`，跨年补年份（详情卡那三格很窄，塞不下完整时间） */
+function formatStamp(raw: string): string {
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const md = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const hhmm = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return date.getFullYear() === new Date().getFullYear()
+    ? `${md} ${hhmm}`
+    : `${date.getFullYear()}-${md}`;
 }
 
 /** RFC3339 → 本地时间；后端存的是 UTC */
@@ -74,12 +81,32 @@ export default function ViewerApp() {
   const [toast, setToast] = useState<string | null>(null);
   /** 当前条目是否已经贴在桌面上（浮窗按钮据此变成「取消贴图」） */
   const [pinned, setPinned] = useState(false);
+  /**
+   * 文件条目的**现场**信息（大小 / 修改时间 / 是否还在）：打开详情时后端 stat 一次。
+   * 不进数据库 —— 用户可能已经改过、删过文件，拿旧快照显示就是在骗人。
+   */
+  const [fileDetails, setFileDetails] = useState<FileDetail[]>([]);
+  /** 单文件的 SHA-256（按需算：key = 路径，切条目就清空） */
+  /** 按需算出来的两种校验和（换条目时清空，见下面加载 effect） */
+  const [hashes, setHashes] = useState<FileHashes | null>(null);
+  const [hashing, setHashing] = useState(false);
   const textRef = useRef<HTMLPreElement>(null);
   const fileListRef = useRef<HTMLDivElement>(null);
   const isImage = clip?.kind === "image";
   const isFile = clip?.kind === "file";
   /** 正文：文本类就是 `text`（文件类有专门的列表布局，不走这里） */
   const body = clip && !isFile ? (clip.text ?? "") : "";
+  const totalFileBytes = fileDetails.reduce((sum, detail) => sum + detail.size, 0);
+  /** 多文件时的格式标签（去重；文件夹单独算一类） */
+  const extLabels = [
+    ...new Set(fileDetails.map((detail) => detail.ext || (detail.isDir ? "文件夹" : "文件"))),
+  ];
+  /** 最新的修改时间（RFC3339 字典序就是时间序） */
+  const latestModified = fileDetails
+    .map((detail) => detail.modified)
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .pop();
 
   /** 提示条 1.8 秒后自己消失 */
   useEffect(() => {
@@ -111,6 +138,8 @@ export default function ViewerApp() {
       setError(null);
       setFit(true);
       setZoom(1);
+      setHashes(null);
+      setFileDetails([]);
       try {
         const loaded = await api.getClip(clipId);
         setClip(loaded);
@@ -125,6 +154,57 @@ export default function ViewerApp() {
       }
     })();
   }, [clipId]);
+
+  // 文件条目的现场信息：换条目时重新 stat 一次（不在列表接口里做，面板列表不该为几行文件去读磁盘）。
+  // 清空在加载那条 effect 里做（同步 setState 会多一轮渲染，也过不了 lint）。
+  useEffect(() => {
+    const paths = isFile ? (clip?.files ?? []) : [];
+    if (paths.length === 0) return;
+    let alive = true;
+    void api
+      .fileDetails(paths)
+      .then((details) => {
+        if (alive) setFileDetails(details);
+      })
+      .catch(() => {
+        if (alive) setFileDetails([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [clip, isFile]);
+
+  /** 复制一段文本（文件名 / 路径 / 校验码）：走 `copy_text`，监听线程不会多记一条历史 */
+  const copyTextValue = async (text: string, note: string) => {
+    try {
+      await api.copyText(text);
+      setToast(note);
+    } catch (err) {
+      setError(`复制失败：${String(err)}`);
+    }
+  };
+
+  /** 在资源管理器里定位文件 */
+  const revealFile = async (path: string) => {
+    try {
+      await api.revealPath(path);
+    } catch (err) {
+      setError(`打开文件位置失败：${String(err)}`);
+    }
+  };
+
+  /** 按需算校验和（SHA-256 + MD5 一次读盘算两个；几百 MB 的文件不会在读详情时就卡住） */
+  const computeHashes = async (path: string) => {
+    if (hashing) return;
+    setHashing(true);
+    try {
+      setHashes(await api.fileHashes(path));
+    } catch (err) {
+      setError(`计算校验和失败：${String(err)}`);
+    } finally {
+      setHashing(false);
+    }
+  };
 
   /** 复制到剪贴板 + 提示条 */
   const copy = async () => {
@@ -268,10 +348,18 @@ export default function ViewerApp() {
                 ) : isFile ? (
                   <>
                     <span className="meta-chip meta-chip--secondary">
-                      {clip?.files?.length ?? 0} 个文件
+                      {fileDetails.length > 1
+                        ? `${fileDetails.length} 个文件`
+                        : (fileDetails[0]?.kind ?? "文件")}
                     </span>
-                    <span className="meta-chip">{formatBytes(clip?.bytes ?? 0)}</span>
-                    <span className="meta-chip meta-chip--primary">路径</span>
+                    <span className="meta-chip">
+                      {formatBytes(fileDetails.length > 0 ? totalFileBytes : (clip?.bytes ?? 0))}
+                    </span>
+                    <span className="meta-chip meta-chip--primary">
+                      {fileDetails.length === 1
+                        ? (fileDetails[0].ext || "文件")
+                        : `${extLabels.length} 种格式`}
+                    </span>
                   </>
                 ) : (
                   <>
@@ -326,19 +414,219 @@ export default function ViewerApp() {
                 </pre>
               )}
 
-              {/* 文件条目有专门的详情：一行一个文件，而不是一坨路径文本 */}
+              {/* 文件条目：照 stitch 稿「CLIPBOARD DETAIL」——
+                  文件卡（类型 + 文件名 + 复制文件名）→ 格式 / 大小 / 修改时间 → 路径块 → 校验和块。
+                  多个文件时退化成「总览卡 + 一行一个文件」，每行照样能复制路径 / 定位。
+                  全部字段都是**现场**读的（`file_details`），删过、挪过的文件会如实标出来。 */}
               {isFile && clip && (
-                <div ref={fileListRef} className="viewer-files">
-                  {(clip.files ?? []).length === 0 ? (
-                    <p className="viewer-files-empty">没有可显示的文件路径</p>
-                  ) : (
-                    (clip.files ?? []).map((path) => (
-                      <div key={path} className="viewer-file-row" title={path}>
-                        <IconFile size={15} />
-                        <span className="viewer-file-name">{fileName(path)}</span>
-                        <span className="viewer-file-dir">{fileDir(path)}</span>
+                <div ref={fileListRef} className="file-detail">
+                  {fileDetails.length === 0 ? (
+                    <p className="viewer-files-empty">
+                      {(clip.files ?? []).length === 0
+                        ? "没有可显示的文件路径"
+                        : "正在读取文件信息…"}
+                    </p>
+                  ) : fileDetails.length === 1 ? (
+                    <>
+                      <div className="file-card">
+                        <div className="file-card-icon">
+                          <IconFile size={24} />
+                        </div>
+                        <div className="file-card-text">
+                          <span className="file-card-kind">
+                            {fileDetails[0].kind}
+                            {!fileDetails[0].exists && (
+                              <span className="file-card-missing">已不在原位置</span>
+                            )}
+                          </span>
+                          <span className="file-card-name" title={fileDetails[0].path}>
+                            {fileDetails[0].name}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          title="复制文件名"
+                          onClick={() =>
+                            void copyTextValue(fileDetails[0].name, "已复制文件名")
+                          }
+                        >
+                          <IconCopy size={12} />
+                          复制文件名
+                        </button>
                       </div>
-                    ))
+
+                      <div className="file-facts">
+                        <div className="file-fact">
+                          <span className="file-fact-label">文件格式</span>
+                          <span className="file-fact-value file-fact-value--accent">
+                            {fileDetails[0].isDir ? "文件夹" : fileDetails[0].ext || "—"}
+                          </span>
+                        </div>
+                        <div className="file-fact">
+                          <span className="file-fact-label">文件大小</span>
+                          <span className="file-fact-value">
+                            {fileDetails[0].isDir
+                              ? "—"
+                              : formatBytes(fileDetails[0].size)}
+                          </span>
+                        </div>
+                        <div className="file-fact">
+                          <span className="file-fact-label">修改时间</span>
+                          <span className="file-fact-value">
+                            {fileDetails[0].modified
+                              ? formatStamp(fileDetails[0].modified)
+                              : "—"}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="file-block">
+                        <span className="file-block-label">绝对路径</span>
+                        <div className="file-block-row">
+                          <span className="file-path" title={fileDetails[0].path}>
+                            {fileDetails[0].path}
+                          </span>
+                          <div className="file-block-actions">
+                            <button
+                              type="button"
+                              className="ghost-button"
+                              title="复制完整路径"
+                              onClick={() =>
+                                void copyTextValue(fileDetails[0].path, "已复制路径")
+                              }
+                            >
+                              <IconCopy size={12} />
+                              复制路径
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost-button"
+                              title="在资源管理器里选中它"
+                              onClick={() => void revealFile(fileDetails[0].path)}
+                            >
+                              <IconFolder size={12} />
+                              在文件夹中打开
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="file-block">
+                        <div className="file-block-head">
+                          <span className="file-block-label">文件校验和</span>
+                          {!hashes && (
+                            <button
+                              type="button"
+                              className="ghost-button"
+                              disabled={hashing || !fileDetails[0].exists}
+                              title={
+                                fileDetails[0].exists
+                                  ? "读一遍文件，同时算出 SHA-256 与 MD5"
+                                  : "文件已不在原位置，算不了"
+                              }
+                              onClick={() => void computeHashes(fileDetails[0].path)}
+                            >
+                              {hashing ? "计算中…" : "计算校验和"}
+                            </button>
+                          )}
+                        </div>
+                        {(
+                          [
+                            ["SHA-256", hashes?.sha256, "sha256"],
+                            ["MD5", hashes?.md5, "md5"],
+                          ] as const
+                        ).map(([label, value, key]) => (
+                          <div className="file-hash-row" key={key}>
+                            <span className="file-hash-label">{label}</span>
+                            <span className="file-hash" title={value ?? undefined}>
+                              {value ?? (hashing ? "计算中…" : "按需计算")}
+                            </span>
+                            <button
+                              type="button"
+                              className="file-icon-button"
+                              disabled={!value}
+                              aria-label={`复制 ${label} 校验码`}
+                              title={value ? `复制 ${label} 校验码` : "先算一次校验和"}
+                              onClick={() => void copyTextValue(value ?? "", "已复制校验码")}
+                            >
+                              <IconCopy size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="file-card">
+                        <div className="file-card-icon">
+                          <IconFile size={24} />
+                        </div>
+                        <div className="file-card-text">
+                          <span className="file-card-kind">
+                            {fileDetails.length} 个文件 · {formatBytes(totalFileBytes)}
+                          </span>
+                          <span className="file-card-name">
+                            {extLabels.slice(0, 3).join(" · ")}
+                            {latestModified && ` · 最新修改 ${formatStamp(latestModified)}`}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          title="复制全部路径（每行一条）"
+                          onClick={() =>
+                            void copyTextValue(
+                              fileDetails.map((detail) => detail.path).join("\r\n"),
+                              "已复制全部路径",
+                            )
+                          }
+                        >
+                          <IconCopy size={12} />
+                          复制全部路径
+                        </button>
+                      </div>
+
+                      <div className="file-list">
+                        {fileDetails.map((detail) => (
+                          <div key={detail.path} className="file-list-row" title={detail.path}>
+                            <span className="file-ext-badge">
+                              {detail.isDir ? "DIR" : detail.ext || "FILE"}
+                            </span>
+                            <span className="file-list-name">{detail.name}</span>
+                            <span
+                              className={
+                                "file-list-size" + (detail.exists ? "" : " is-missing")
+                              }
+                            >
+                              {!detail.exists
+                                ? "已不在"
+                                : detail.isDir
+                                  ? "文件夹"
+                                  : formatBytes(detail.size)}
+                            </span>
+                            <button
+                              type="button"
+                              className="file-icon-button"
+                              title="复制完整路径"
+                              aria-label="复制完整路径"
+                              onClick={() => void copyTextValue(detail.path, "已复制路径")}
+                            >
+                              <IconCopy size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              className="file-icon-button"
+                              title="在资源管理器里选中它"
+                              aria-label="在资源管理器里选中它"
+                              onClick={() => void revealFile(detail.path)}
+                            >
+                              <IconFolder size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -433,14 +721,26 @@ export default function ViewerApp() {
       </main>
 
       <footer className="app-footer">
-        <div className="app-footer-group mono">
-          <span>MIME: {isImage ? "image/png" : isFile ? "text/uri-list" : "text/plain"}</span>
+        {/* 左边只放「这条内容的客观事实」，右边只放快捷键提示 ——
+            稿子（600x500_v3）与面板页脚都是右端只有 `Esc Close`，
+            时间留在右端会把 Esc 提示从最右边挤开。 */}
+        <div className="app-footer-group app-footer-facts mono">
+          <span>
+            MIME:{" "}
+            {isImage
+              ? "image/png"
+              : isFile
+                ? fileDetails.length === 1
+                  ? fileDetails[0].mime
+                  : "text/uri-list"
+                : "text/plain"}
+          </span>
+          <span className="app-footer-dot" aria-hidden="true" />
+          <span>{clip ? `创建 ${formatTime(clip.createdAt)}` : "加载中…"}</span>
         </div>
         <div className="app-footer-group">
           <span className="kbd">Esc</span>
           <span>返回</span>
-          <span className="app-footer-dot" aria-hidden="true" />
-          <span>{clip ? `创建 ${formatTime(clip.createdAt)}` : "加载中…"}</span>
         </div>
       </footer>
     </div>

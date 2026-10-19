@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api, dataDir } from "../api";
 import {
   IconBall,
+  IconClipboardArrow,
   IconDatabase,
   IconFolder,
   IconHistory,
@@ -128,9 +129,9 @@ export default function SettingsPage({ onChanged }: Props) {
         <input
           className="slider"
           type="range"
-          min={100}
+          min={50}
           max={5000}
-          step={100}
+          step={50}
           value={settings?.maxItems ?? 300}
           aria-label="历史条目上限"
           onChange={(e) => void patch({ maxItems: Number(e.target.value) || 300 })}
@@ -224,7 +225,7 @@ export default function SettingsPage({ onChanged }: Props) {
             role="switch"
             aria-checked={ballShown}
             aria-label="显示悬浮球"
-            title={ballShown ? "隐藏悬浮球（可再启动 PPClip 找回）" : "显示悬浮球"}
+            title={ballShown ? "隐藏悬浮球（托盘菜单里可找回）" : "显示悬浮球"}
             onClick={() => void toggleBall()}
           >
             <span className="switch-knob" />
@@ -246,6 +247,30 @@ export default function SettingsPage({ onChanged }: Props) {
             onChange={(e) => void patch({ ballOpacity: Number(e.target.value) || 100 })}
           />
         </div>
+      </section>
+
+      {/* 面板外观：不透明度 */}
+      <section className="settings-card">
+        <div className="settings-card-head">
+          <span className="settings-label">
+            <IconClipboardArrow size={16} />
+            面板不透明度
+          </span>
+          <span className="settings-value">{settings?.panelOpacity ?? 100}%</span>
+        </div>
+        <input
+          className="slider"
+          type="range"
+          min={20}
+          max={100}
+          step={5}
+          value={settings?.panelOpacity ?? 100}
+          aria-label="面板不透明度"
+          onChange={(e) => void patch({ panelOpacity: Number(e.target.value) || 100 })}
+        />
+        <span className="settings-hint">
+          只影响面板的玻璃底色；100% 完全不透明，文字始终清晰
+        </span>
       </section>
 
       {/* 开机自启 */}

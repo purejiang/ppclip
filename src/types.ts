@@ -19,6 +19,8 @@ export interface AppSettings {
   panelY: number | null;
   /** 面板桌面置顶：开着 = 常驻最上层 + 点外部不关；关着 = 失焦自动收起 */
   panelPinned: boolean;
+  /** 面板不透明度（20~100，%）：只调玻璃卡片底色（100 = 完全不透明），文字保持不透明 */
+  panelOpacity: number;
 }
 
 export type ClipKind = "text" | "image" | "file";
@@ -41,6 +43,34 @@ export interface Clip {
   createdAt: string;
   lastUsedAt: string;
   useCount: number;
+}
+
+/** 文件条目里单个文件的现场信息，对应 Rust `models::FileDetail` */
+export interface FileDetail {
+  /** 原始路径（大小写 / 分隔符都不动） */
+  path: string;
+  name: string;
+  /** 所在目录（没有目录部分就是空串） */
+  dir: string;
+  /** 大写扩展名；没有扩展名 / 文件夹 = 空串 */
+  ext: string;
+  /** 中文类型说明（PDF 文档 / 图片 / 文件夹 / 文件 …） */
+  kind: string;
+  /** 按扩展名猜的 MIME（文件夹是 `inode/directory`） */
+  mime: string;
+  /** 字节数；文件夹或已被删除 = 0 */
+  size: number;
+  /** 修改时间（RFC3339，本地时区）；读不到为 null */
+  modified: string | null;
+  /** 文件还在不在（不在时界面要提示，复制会被后端拒绝） */
+  exists: boolean;
+  isDir: boolean;
+}
+
+/** 一个文件的两种校验和，对应 Rust `models::FileHashes` */
+export interface FileHashes {
+  sha256: string;
+  md5: string;
 }
 
 /** 一条桌面贴图，对应 Rust `models::Pin` */

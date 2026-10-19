@@ -6,8 +6,9 @@ import ClipRow from "../components/ClipRow";
 import SettingsPage from "../components/SettingsPage";
 import {
   IconArrowBack,
-  IconEraser,
   IconClipboardArrow,
+  IconClose,
+  IconEraser,
   IconGear,
   IconKeepOnTop,
   IconMonitor,
@@ -33,9 +34,10 @@ function formatBytes(bytes: number): string {
 /**
  * 历史面板（照 stitch 稿）：
  *
- * 48px 居中品牌头（左占位 + PPCLIP + 右上设置）→ 搜索 + 胶囊筛选（带闪电开关）
- * → 扁平玻璃列表 → 状态条（脉冲点 + n / 上限 + 截图 / 清空）→ 24px 页脚（Esc 关闭）。
- * 设置是同一扇窗里的第二屏（标题栏换成「← + 剪贴板设置」），所以 Esc 是返回而不是关窗。
+ * 48px 居中品牌头（左上设置 + PPCLIP + 右上 桌面置顶 / 关闭）
+ * → 搜索 + 胶囊筛选 → 扁平玻璃列表 → 状态条（脉冲点 + n / 上限 + 截图 / 清空）
+ * → 24px 页脚（Esc 关闭）。设置是同一扇窗里的第二屏（标题栏换成「← 返回 + 剪贴板设置」），
+ * 关闭按钮始终在最右侧，Esc 在设置屏只回上一层。
  */
 export default function PanelApp() {
   const [clips, setClips] = useState<Clip[]>([]);
@@ -57,8 +59,11 @@ export default function PanelApp() {
   const [maxItems, setMaxItems] = useState(300);
   /** 面板是否「桌面置顶」（常驻最上层 + 点外部不关） */
   const [pinned, setPinned] = useState(false);
+  /** 面板不透明度（%）：只调玻璃卡片底色，100 = 完全不透明，见 styles 里的 `--panel-opacity` */
+  const [panelOpacity, setPanelOpacity] = useState(100);
   const [clearing, setClearing] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
+  const clipListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -108,6 +113,9 @@ export default function PanelApp() {
       setStats(nextStats);
       setMaxItems(settings.maxItems);
       setPinned(settings.panelPinned);
+      // ?? 100：后端比前端旧时（dev 热更、半新半旧的组合）字段可能是 undefined，
+      // 直接算会得到 NaN 的 CSS 变量，把玻璃底色整个算废
+      setPanelOpacity(settings.panelOpacity ?? 100);
       setPinnedIds(pins.map((pin) => pin.clipId));
       setActive((index) => Math.min(index, Math.max(0, list.length - 1)));
       setError(null);
@@ -119,6 +127,13 @@ export default function PanelApp() {
   useEffect(() => {
     void dataDir().then(setDir);
   }, []);
+
+  // 面板不透明度：写进根节点的 CSS 变量，玻璃卡片 / 标题栏 / 状态条 / 页脚一起变透
+  useEffect(() => {
+    // NaN / 0 一律当 100%（写成 NaN 会让 calc 在计算值阶段失效，底色直接没了）
+    const value = panelOpacity > 0 ? panelOpacity / 100 : 1;
+    document.documentElement.style.setProperty("--panel-opacity", String(value));
+  }, [panelOpacity]);
 
   // 搜索防抖：避免每敲一个字都查一遍库
   useEffect(() => {
@@ -201,15 +216,28 @@ export default function PanelApp() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [clips, active, settingsOpen]);
 
-  // 选中项滚动进视野
+  // 换搜索词 / 筛选：结果换了一批，选中项回到第一条、列表回顶部。
+  // 注意这跟下面的「选中项进视野」是两件事：refresh 造成的数组变化不能滚列表。
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- 搜索 / 筛选是外部输入，重置选中项
+    setActive(0);
+    clipListRef.current?.scrollTo({ top: 0 });
+  }, [debounced, kind]);
+
+  // 选中项滚动进视野：**只跟 active（以及从设置屏返回）走，别依赖 clips**。
+  // 面板每次 refresh（复制了新内容、关掉详情窗口后重新聚焦）都会拿到一个新数组，
+  // 依赖 clips 就会反复把列表滚到 active 那一条（通常是第 0 条）—— 用户「滚到底部
+  // 点开详情，关掉后跳回顶部」就是这条触发的。
   useEffect(() => {
     document
       .querySelector(".clip-row.is-active")
       ?.scrollIntoView({ block: "nearest" });
-  }, [active, clips, settingsOpen]);
+  }, [active, settingsOpen]);
 
-  /** 单击一条：看完整内容 */
+  /** 单击一条：先把它设为选中（选中跟手，别只让方向键改），再看完整内容 */
   const handleRowClick = (clip: Clip) => {
+    const index = clips.findIndex((item) => item.id === clip.id);
+    if (index >= 0) setActive(index);
     void api.openViewer(clip.id);
   };
 
@@ -262,7 +290,7 @@ export default function PanelApp() {
         onDoubleClick={(e) => e.stopPropagation()}
       >
         <div className="app-header-side">
-          {settingsOpen && (
+          {settingsOpen ? (
             <button
               type="button"
               className="app-header-button"
@@ -272,6 +300,16 @@ export default function PanelApp() {
             >
               <IconArrowBack size={16} />
             </button>
+          ) : (
+            <button
+              type="button"
+              className="app-header-button app-header-button--primary"
+              title="设置"
+              aria-label="设置"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <IconGear size={16} />
+            </button>
           )}
         </div>
 
@@ -280,34 +318,33 @@ export default function PanelApp() {
           {settingsOpen ? "剪贴板设置" : "PPCLIP"}
         </div>
 
-        <div className="app-header-side">
+        <div className="app-header-side app-header-side--end">
           {!settingsOpen && (
-            <>
-              <button
-                type="button"
-                className={`app-header-button app-header-button--tertiary${pinned ? " is-on" : ""}`}
-                title={
-                  pinned
-                    ? "已开启桌面置顶：面板常驻最上层，点外部不会关"
-                    : "桌面置顶：常驻最上层，点外部不关闭"
-                }
-                aria-label="桌面置顶"
-                aria-pressed={pinned}
-                onClick={() => void togglePinned()}
-              >
-                <IconKeepOnTop size={16} />
-              </button>
-              <button
-                type="button"
-                className="app-header-button app-header-button--primary"
-                title="设置"
-                aria-label="设置"
-                onClick={() => setSettingsOpen(true)}
-              >
-                <IconGear size={16} />
-              </button>
-            </>
+            <button
+              type="button"
+              className={`app-header-button app-header-button--tertiary${pinned ? " is-on" : ""}`}
+              title={
+                pinned
+                  ? "已开启桌面置顶：面板常驻最上层，点外部不会关"
+                  : "桌面置顶：常驻最上层，点外部不关闭"
+              }
+              aria-label="桌面置顶"
+              aria-pressed={pinned}
+              onClick={() => void togglePinned()}
+            >
+              <IconKeepOnTop size={16} />
+            </button>
           )}
+          {/* 最右侧固定是关闭：设置屏也一样，Esc 才只回上一层 */}
+          <button
+            type="button"
+            className="app-header-button"
+            title={settingsOpen ? "关闭面板" : "关闭面板（Esc）"}
+            aria-label="关闭面板"
+            onClick={() => void api.hidePanel()}
+          >
+            <IconClose size={16} />
+          </button>
         </div>
       </header>
 
@@ -351,7 +388,7 @@ export default function PanelApp() {
                 </div>
             </div>
 
-            <div className="clip-list">
+            <div className="clip-list" ref={clipListRef}>
               {clips.length === 0 ? (
                 <p className="placeholder">
                   {debounced

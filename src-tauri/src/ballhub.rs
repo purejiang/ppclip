@@ -40,11 +40,32 @@
 //! 而中心盘就摆在盘心。**不要为了「把球钉在原地」再加偏移补偿** —— 那会把中心球推到
 //! 盘边缘，看起来像球飞了（真机反馈过）。
 //!
+//! ## 吸附 + 悬停唤出 + 自动贴回（三条路径，别混）
+//!
+//! 1. **落点吸附**：只在拖动结束（[`finish_drag`]）判定，判据是当前形态的形状边距
+//!    屏幕边 ≤ [`geom::DOCK_EDGE_MARGIN_LOGICAL`]。判成胶囊后走 [`apply_dock`]，
+//!    窗口用 **120ms ease-out** 滑到屏幕边（`start_dock_animation`）——以前是单次
+//!    `set_position` 瞬移，观感「太突然」。
+//! 2. **悬停唤出**：贴边胶囊上悬停 → [`set_form`]`(false)`，立刻换位置，**不动画**；
+//!    位置由 [`geom::clamp_orb_inset`] 决定：球整块在屏内**且离屏幕边留
+//!    [`geom::UNDOCK_EDGE_INSET_LOGICAL`]（6px）**，否则右上角标 / hover 描边 /
+//!    投影会被屏幕边切掉（用户反馈「球太靠右，右侧被挡住」）。
+//! 3. **自动贴回**：悬停唤出之后，鼠标离开球（真实 `GetCursorPos`，≥10px 连续 3 拍）
+//!    且球仍在贴边带里 → [`arm_redock`] 看门狗调 [`apply_dock`] 滑回原侧胶囊。
+//!    **不是位置上报驱动**（否则刚唤出就会被吸回去）；只在命令层 `set_ball_docked(false)`
+//!    之后武装，拖动 / 隐藏会让它作废，轮盘开着时暂停。
+//!
+//! 动画与两条看门狗都用**单调递增的世代号**（`anim_gen` / `redock_gen`）取消，
+//! 不跨线程持锁：动画线程里的 `set_position` 在 Windows 上要等窗口线程，
+//! 主线程拿着锁等它就是死锁。
+//!
 //! 几何本身（纯算术 + 单测）在 [`geom`]，这里只负责「什么时候调哪个函数」。
 
 pub mod geom;
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
 
@@ -57,6 +78,24 @@ use geom::{Anchor, BallForm, DockSide, MonitorRect};
 pub const BALL_LABEL: &str = "ball";
 /// 形态 / 轮盘开合的快照与事件（payload 都是 [`BallSnapshot`]）
 pub const FORM_EVENT: &str = "ball:form";
+/// 吸附时的滑入动画时长（毫秒）。用户反馈「松手瞬间跳过去」太生硬，这里给一段
+/// ease-out 的位移过渡；真机嫌快/慢只改这一个常量。
+pub const DOCK_ANIM_MS: u64 = 120;
+/// 滑入动画的分步间隔：120 / 8 = 15 步（每步一次 `set_position`）
+const DOCK_ANIM_STEP_MS: u64 = 8;
+/// 自动贴回看门狗的轮询间隔
+const REDOCK_TICK_MS: u64 = 100;
+/// 光标连续这么多拍都在球外，才认为「真的离开了」（去抖，~300ms）
+const REDOCK_LEAVE_TICKS: u32 = 3;
+/// 光标离球形状超过这么多逻辑像素才算离开。
+///
+/// **必须大于 `(TAB_H_LOGICAL - ORB_LOGICAL)/2` = 6**：贴回胶囊后胶囊比球高出来
+/// 6px，阈值小了光标会正好落在胶囊上，前端悬停又把胶囊唤回常规态 → 来回闪。
+/// `ballhub` 的常量不变量测试守住这条。
+const REDOCK_LEAVE_GAP_LOGICAL: f64 = 10.0;
+/// 看门狗最长挂多久（鼠标一直不离开球就别常驻轮询了）
+const REDOCK_GIVE_UP_MS: u64 = 5 * 60 * 1000;
+
 struct Inner {
     /// 单调递增：前端只接受 `rev >= lastRev` 的快照 / 事件。
     /// 没有它，「先 listen 再拉快照」仍有竞态（快照回来得比事件晚，会把新状态盖成旧的）。
@@ -86,6 +125,17 @@ impl Default for Inner {
 #[derive(Default)]
 pub struct BallHubState {
     inner: Mutex<Inner>,
+    /// 滑入动画的世代：任何新的几何操作 +1，动画线程发现自己过期就直接退出。
+    ///
+    /// 为什么不用锁串行化：动画线程会调 `set_position`（Windows 上跨线程
+    /// `SetWindowPos` 要等窗口线程），而同步命令跑在主线程 / WebView2 回调里，
+    /// 主线程拿着锁等它就死锁。世代号只做「过期就别再动窗口」。
+    anim_gen: AtomicU64,
+    /// 是否有滑入动画在跑：`finish_drag` 会被前端 Promise 和看门狗各调一次，
+    /// 第二次不能拿滑到一半的窗口位置重新判定落点。
+    anim_running: AtomicBool,
+    /// 自动贴回看门狗的世代：开始拖动 / 隐藏 / 已经贴回 都让它过期
+    redock_gen: AtomicU64,
 }
 
 /// 给前端的完整状态快照（事件与快照命令用同一份结构）
@@ -120,6 +170,27 @@ fn with_inner<R>(app: &AppHandle, f: impl FnOnce(&mut Inner) -> R) -> Option<R> 
     })
 }
 
+/// 让正在跑的滑入动画作废（之后它一步窗口都不许再动）。
+fn cancel_anim(app: &AppHandle) {
+    if let Some(state) = app.try_state::<BallHubState>() {
+        state.anim_gen.fetch_add(1, Ordering::SeqCst);
+        state.anim_running.store(false, Ordering::SeqCst);
+    }
+}
+
+fn anim_is_running(app: &AppHandle) -> bool {
+    app.try_state::<BallHubState>()
+        .map(|state| state.anim_running.load(Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
+/// 让自动贴回看门狗作废（开始拖动 / 隐藏 / 已经贴回时调用）。
+fn cancel_redock(app: &AppHandle) {
+    if let Some(state) = app.try_state::<BallHubState>() {
+        state.redock_gen.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 fn mon_rects(app: &AppHandle) -> Vec<MonitorRect> {
     app.available_monitors()
         .map(|list| {
@@ -140,8 +211,14 @@ fn monitor_for(app: &AppHandle, anchor: Anchor) -> Option<MonitorRect> {
     geom::monitor_at(anchor, &list).or_else(|| geom::nearest_monitor(anchor, &list))
 }
 
-/// 钳制 + 选边（几何的唯一「归一化」入口，顺序变了就等于换了行为）
-fn normalize(
+/// 钳制 + 选边（几何的唯一「归一化」入口，顺序变了就等于换了行为）。
+///
+/// - `Tab`：贴住屏幕边（`clamp_anchor`）；
+/// - `Orb`：球整块在屏内，**而且离屏幕边留 `UNDOCK_EDGE_INSET_LOGICAL` 的余量**
+///   （`clamp_orb_inset`）—— 贴边胶囊悬停出来的球如果压着屏幕边，角标 / hover
+///   描边 / 投影就被切掉了。拖动落点不走吸附判定之外的夹取，所以这里的余量不会
+///   改变「拖到边上就吸」的行为（压到边的球本来就会先被判成 Tab）。
+fn normalize_shape(
     form: BallForm,
     anchor: Anchor,
     mon: Option<MonitorRect>,
@@ -150,7 +227,12 @@ fn normalize(
     match mon {
         Some(mon) => {
             let side = geom::dock_side(anchor, mon);
-            let anchor = geom::clamp_anchor(form, side, anchor, mon, scale);
+            let anchor = match form {
+                BallForm::Tab => geom::clamp_anchor(form, side, anchor, mon, scale),
+                BallForm::Orb => {
+                    geom::clamp_orb_inset(anchor, mon, scale, geom::UNDOCK_EDGE_INSET_LOGICAL)
+                }
+            };
             (side, anchor)
         }
         // 一块屏都拿不到（极端环境）：保持原样，别把球算到屏幕外
@@ -313,9 +395,9 @@ pub fn init(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
         }
     };
 
-    // 3) 形态 + 钳制 + 落位
+    // 3) 形态 + 钳制 + 落位（Orb 也要离屏幕边留 6px：老版本可能存了压边的 anchor）
     let form = BallForm::from_docked(settings.ball_docked);
-    let (side, anchor) = normalize(form, anchor, monitor_for(app, anchor), scale);
+    let (side, anchor) = normalize_shape(form, anchor, monitor_for(app, anchor), scale);
     win.set_position(geom::window_pos(anchor, size))
         .map_err(|e| format!("调整悬浮球位置失败: {e}"))?;
 
@@ -345,7 +427,12 @@ pub fn init(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
 
 /// 切「贴边胶囊 ↔ 常规球」（胶囊上悬停 / 单击都走这里）。
 ///
-/// 只改**位置**、不改尺寸 —— 单次 `set_position` 是原子的，没有「先 resize 再 reposition」
+/// - **胶囊 → 常规球**（悬停唤出）：立刻换位置，**不做动画** —— 球要出现在光标底下。
+///   位置由 [`geom::clamp_orb_inset`] 决定（离屏幕边留 `UNDOCK_EDGE_INSET_LOGICAL`，
+///   右上角标 / hover 描边 / 投影不被屏幕边切掉）。
+/// - **常规球 → 胶囊**（自动贴回 / 显式贴边）：走 [`apply_dock`]，带 120ms 滑入动画。
+///
+/// 只改**位置**、不改尺寸 —— 收起态窗口尺寸恒定，所以换形态没有「先 resize 再 reposition」
 /// 那种半帧错位。展开态下不切（那时窗口是按轮盘摆的）。
 pub fn set_form(app: &AppHandle, docked: bool) -> Result<BallSnapshot, String> {
     let Some(win) = app.get_webview_window(BALL_LABEL) else {
@@ -355,6 +442,12 @@ pub fn set_form(app: &AppHandle, docked: bool) -> Result<BallSnapshot, String> {
         log::debug!("轮盘开着，忽略形态切换（docked={docked}）");
         return Ok(snapshot(app));
     }
+    if docked {
+        // 贴回胶囊：先提交形态、再把窗口滑过去（也能处理「已经是胶囊、只是挪了位置」）
+        return apply_dock(app, &win);
+    }
+    cancel_anim(app);
+
     let scale = win
         .scale_factor()
         .map_err(|e| format!("读取悬浮球缩放失败: {e}"))?;
@@ -365,9 +458,9 @@ pub fn set_form(app: &AppHandle, docked: bool) -> Result<BallSnapshot, String> {
         .outer_position()
         .map_err(|e| format!("读取悬浮球位置失败: {e}"))?;
 
-    let form = BallForm::from_docked(docked);
+    let form = BallForm::Orb;
     let anchor = geom::anchor_of(pos, size);
-    let (side, anchor) = normalize(form, anchor, monitor_for(app, anchor), scale);
+    let (side, anchor) = normalize_shape(form, anchor, monitor_for(app, anchor), scale);
     let target = geom::window_pos(anchor, size);
     if target != pos {
         win.set_position(target)
@@ -382,8 +475,7 @@ pub fn set_form(app: &AppHandle, docked: bool) -> Result<BallSnapshot, String> {
         inner.win = Some(size);
     });
     log::info!(
-        "悬浮球形态 → {}：窗口 {}×{} @({}, {}) → @({}, {})，锚点 ({}, {})",
-        form.name(),
+        "悬浮球形态 → orb：窗口 {}×{} @({}, {}) → @({}, {})，锚点 ({}, {})（离屏幕边留 {} 逻辑像素）",
         size.width,
         size.height,
         pos.x,
@@ -391,20 +483,135 @@ pub fn set_form(app: &AppHandle, docked: bool) -> Result<BallSnapshot, String> {
         target.x,
         target.y,
         anchor.x,
-        anchor.y
+        anchor.y,
+        geom::UNDOCK_EDGE_INSET_LOGICAL
     );
     emit_form(app);
     Ok(snapshot(app))
 }
 
-/// **拖动结束**：按落点决定形态（靠边就吸成胶囊）。**全项目唯一判定吸附的地方。**
+/// 把悬浮球贴回屏幕边（带 120ms 滑入动画）。`finish_drag`、`set_form(true)`、
+/// 自动贴回看门狗共用这一条路径。
 ///
-/// 为什么只在这里判：常规球被钳进可视区之后左边缘同样贴着屏幕，位置一上报就会被
-/// 误判成「想贴边」，把刚唤出来的常规态吸回胶囊（踩过）。
+/// **先提交形态、再滑窗口**：屏幕上滑动的是 16×64 的胶囊，而不是让 52×52 的球滑到
+/// 一半挂在屏幕外。窗口位置只由 anchor 推导（`window_pos`），动画只负责把窗口从
+/// 「松手 / 原位置」插值到目标，**anchor 本身不参与动画**。
+///
+/// 命令立即返回，动画在独立线程里跑 —— 前端拿到的快照已经是最终形态。
+fn apply_dock(app: &AppHandle, win: &tauri::WebviewWindow) -> Result<BallSnapshot, String> {
+    cancel_anim(app);
+    cancel_redock(app);
+
+    let scale = win
+        .scale_factor()
+        .map_err(|e| format!("读取悬浮球缩放失败: {e}"))?;
+    let size = win
+        .outer_size()
+        .map_err(|e| format!("读取悬浮球尺寸失败: {e}"))?;
+    let pos = win
+        .outer_position()
+        .map_err(|e| format!("读取悬浮球位置失败: {e}"))?;
+    let anchor = geom::anchor_of(pos, size);
+
+    let form = BallForm::Tab;
+    let (side, anchor) = normalize_shape(form, anchor, monitor_for(app, anchor), scale);
+    let target = geom::window_pos(anchor, size);
+
+    with_inner(app, |inner| {
+        inner.rev += 1;
+        inner.form = form;
+        inner.side = side;
+        inner.anchor = anchor;
+        inner.win = Some(size);
+    });
+    log::info!(
+        "贴回贴边态 → tab：形状中心 ({}, {})，窗口 @({}, {}) → @({}, {}){}",
+        anchor.x,
+        anchor.y,
+        pos.x,
+        pos.y,
+        target.x,
+        target.y,
+        if target != pos {
+            "（120ms 滑入）"
+        } else {
+            ""
+        }
+    );
+    emit_form(app);
+
+    if target != pos {
+        start_dock_animation(app, pos, target);
+    }
+    Ok(snapshot(app))
+}
+
+/// ease-out 三次曲线滑入：只动窗口位置，不碰状态。
+///
+/// 每一步都先检查 `anim_gen` 还是不是自己这一代 —— 一旦被新的几何操作
+/// （切形态 / 开合轮盘 / 开始拖动 / 隐藏 / DPI 变化）作废，立刻收手，
+/// 免得和主线程或原生拖动循环抢窗口。**不要改成持锁串行化**：动画线程里的
+/// `set_position` 在 Windows 上要等窗口线程，主线程拿着锁等它就是死锁。
+fn start_dock_animation(app: &AppHandle, from: PhysicalPosition<i32>, to: PhysicalPosition<i32>) {
+    let app_for_thread = app.clone();
+    let gen = match app.try_state::<BallHubState>() {
+        Some(state) => {
+            let gen = state.anim_gen.fetch_add(1, Ordering::SeqCst) + 1;
+            state.anim_running.store(true, Ordering::SeqCst);
+            gen
+        }
+        None => return,
+    };
+    std::thread::spawn(move || {
+        let Some(win) = app_for_thread.get_webview_window(BALL_LABEL) else {
+            return;
+        };
+        let steps = (DOCK_ANIM_MS / DOCK_ANIM_STEP_MS).max(1);
+        for step in 1..=steps {
+            std::thread::sleep(Duration::from_millis(DOCK_ANIM_STEP_MS));
+            let Some(state) = app_for_thread.try_state::<BallHubState>() else {
+                return;
+            };
+            if state.anim_gen.load(Ordering::SeqCst) != gen {
+                return;
+            }
+            drop(state);
+            let t = step as f64 / steps as f64;
+            let eased = 1.0 - (1.0 - t).powi(3);
+            let position = PhysicalPosition::new(
+                from.x + ((to.x - from.x) as f64 * eased).round() as i32,
+                from.y + ((to.y - from.y) as f64 * eased).round() as i32,
+            );
+            if let Err(err) = win.set_position(position) {
+                log::warn!("贴边动画：移动悬浮球失败: {err}");
+                break;
+            }
+        }
+        let Some(state) = app_for_thread.try_state::<BallHubState>() else {
+            return;
+        };
+        if state.anim_gen.load(Ordering::SeqCst) == gen {
+            let _ = win.set_position(to);
+            state.anim_running.store(false, Ordering::SeqCst);
+            if let Err(err) = persist(&app_for_thread) {
+                log::warn!("保存悬浮球位置失败: {err}");
+            }
+        }
+    });
+}
+
+/// **拖动结束**：按落点决定形态（靠边就吸成胶囊）。**全项目唯一判定「落点吸附」的地方。**
+///
+/// 为什么只在这里判落点：常规球被钳进可视区之后左边缘同样贴着屏幕，位置一上报就会被
+/// 误判成「想贴边」，把刚唤出来的常规态吸回胶囊（踩过）。悬停唤出之后的「自动贴回」
+/// 是另一条路径（[`arm_redock`]），由**真实光标离开球**触发，不是位置上报。
 ///
 /// 幂等：判完之后几何只会更「规范」（球贴边 → 胶囊贴边 → 再判还是贴边），所以前端和
 /// [`begin_drag`] 的看门狗都调它不会打架。**左键还按着时直接跳过** —— 那说明拖动还在进行，
 /// 这时候把窗口拽回边缘会被移动循环覆盖掉，松手位置也不再被重新判定。
+///
+/// 贴边走 [`apply_dock`]（120ms 滑入）；不贴边就是普通常规球，不动画、也不武装自动贴回
+/// —— 用户是主动把它放在那儿的。
 pub fn finish_drag(app: &AppHandle) -> Result<BallSnapshot, String> {
     let Some(win) = app.get_webview_window(BALL_LABEL) else {
         return Ok(snapshot(app));
@@ -414,6 +621,12 @@ pub fn finish_drag(app: &AppHandle) -> Result<BallSnapshot, String> {
     }
     if left_button_down() {
         log::debug!("左键仍按着，跳过吸附判定（等拖动看门狗兜底）");
+        return Ok(snapshot(app));
+    }
+    // 前端 Promise 与看门狗各调一次：滑入动画进行中时窗口位置是半路的，
+    // 不能拿它重新判定落点（否则会二次起动画、滑到一半再从头缓动）。
+    if anim_is_running(app) {
+        log::debug!("贴边动画进行中，跳过重复的落点判定");
         return Ok(snapshot(app));
     }
     let scale = win
@@ -440,8 +653,22 @@ pub fn finish_drag(app: &AppHandle) -> Result<BallSnapshot, String> {
         ),
         None => form_now == BallForm::Tab,
     };
-    let form = BallForm::from_docked(docked);
-    let (side, anchor) = normalize(form, anchor, monitor_for(app, anchor), scale);
+    if docked {
+        log::info!(
+            "拖动结束 → 贴边：形状中心 ({}, {})，窗口 @({}, {})",
+            anchor.x,
+            anchor.y,
+            pos.x,
+            pos.y
+        );
+        return apply_dock(app, &win);
+    }
+
+    cancel_anim(app);
+    // 拖动 = 主动摆放：落点判定已经在这里做完，不要再被自动贴回接走
+    cancel_redock(app);
+    let form = BallForm::Orb;
+    let (side, anchor) = normalize_shape(form, anchor, monitor_for(app, anchor), scale);
     let target = geom::window_pos(anchor, size);
     if target != pos {
         win.set_position(target)
@@ -456,8 +683,7 @@ pub fn finish_drag(app: &AppHandle) -> Result<BallSnapshot, String> {
         inner.win = Some(size);
     });
     log::info!(
-        "拖动结束 → {}：形状中心 ({}, {})，窗口 @({}, {}) → @({}, {})",
-        form.name(),
+        "拖动结束 → 常规球：形状中心 ({}, {})，窗口 @({}, {}) → @({}, {})",
         anchor.x,
         anchor.y,
         pos.x,
@@ -477,9 +703,13 @@ pub fn finish_drag(app: &AppHandle) -> Result<BallSnapshot, String> {
 /// 所以吸附判定的收尾改成在这里做：**轮询真实的左键状态**，松手后再让窗口停稳一小会儿，
 /// 然后跑一次 [`finish_drag`]。
 ///
-/// 这不推翻 [`finish_drag`] 是唯一判定处：这个线程只是**决定什么时候**去调它。
+/// 这不推翻 [`finish_drag`] 是唯一落点判定处：这个线程只是**决定什么时候**去调它。
 /// 两边都调也不会错（`finish_drag` 幂等，而且左键还按着时它自己会跳过）。
+///
+/// 开始拖动同时让**自动贴回看门狗**和正在跑的滑入动画作废：落点交给 `finish_drag`。
 pub fn begin_drag(app: &AppHandle) {
+    cancel_redock(app);
+    cancel_anim(app);
     let app = app.clone();
     std::thread::spawn(move || {
         // 等松手（最多 30 秒，按住不放就放弃，别在拖动中途去吸边）
@@ -509,6 +739,134 @@ pub fn begin_drag(app: &AppHandle) {
     });
 }
 
+/// **自动贴回**：悬停唤出的常规球，鼠标离开球之后自己滑回原来那一侧的胶囊。
+///
+/// 只在命令层 `set_ball_docked(false)`（真的悬停唤出）之后武装，**不挂在位置上报上**：
+/// 常规球被钳进可视区后边缘照样贴着屏幕，按位置判会「刚唤出就吸回去」（踩过）。
+///
+/// 几条硬要求：
+/// - 用真实光标位置（`GetCursorPos`）轮询，不信前端 pointer 事件 —— 窗口自己动会派
+///   假 `pointerleave`，而且不会补 `pointerover`；
+/// - 只在球仍落在贴边带里时生效：悬停唤出的球一定有 6px 余量（< 24 的带宽），
+///   用户拖到屏幕中间的球（`begin_drag` 已经取消本看门狗）不会被吸回来；
+/// - **轮盘开着时暂停计数**（不清世代）：收起轮盘后鼠标若已经离开，仍会贴回；
+/// - 离开阈值 10 逻辑像素 > 胶囊比球高出来的 6px，贴回后胶囊不会正好落在光标下
+///   被前端再次唤出（来回闪）。
+pub fn arm_redock(app: &AppHandle) {
+    let Some(win) = app.get_webview_window(BALL_LABEL) else {
+        return;
+    };
+    let Some((form, anchor)) = with_inner(app, |inner| (inner.form, inner.anchor)) else {
+        return;
+    };
+    if form != BallForm::Orb || !win.is_visible().unwrap_or(false) {
+        return;
+    }
+    let Ok(scale) = win.scale_factor() else {
+        return;
+    };
+    let Some(mon) = monitor_for(app, anchor) else {
+        return;
+    };
+    if !geom::should_dock(
+        BallForm::Orb,
+        anchor,
+        mon,
+        scale,
+        geom::DOCK_EDGE_MARGIN_LOGICAL,
+    ) {
+        // 球不在贴边带里（比如用户拖到中间松手）：这不是「悬停唤出的球」，不贴
+        return;
+    }
+    let gen = match app.try_state::<BallHubState>() {
+        Some(state) => state.redock_gen.fetch_add(1, Ordering::SeqCst) + 1,
+        None => return,
+    };
+
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let mut off_ticks = 0u32;
+        loop {
+            std::thread::sleep(Duration::from_millis(REDOCK_TICK_MS));
+            match app.try_state::<BallHubState>() {
+                Some(state) if state.redock_gen.load(Ordering::SeqCst) == gen => {}
+                // 世代变了（拖动 / 隐藏 / 已贴回 / 重新武装）：立刻收手
+                _ => return,
+            }
+            if started.elapsed() >= Duration::from_millis(REDOCK_GIVE_UP_MS) {
+                log::info!("自动贴回：等了 5 分钟鼠标还没离开，放弃");
+                return;
+            }
+            let Some(win) = app.get_webview_window(BALL_LABEL) else {
+                return;
+            };
+            if !win.is_visible().unwrap_or(false) {
+                return;
+            }
+            let Some((form, anchor, wheel_open)) =
+                with_inner(&app, |inner| (inner.form, inner.anchor, inner.wheel_open))
+            else {
+                return;
+            };
+            if form != BallForm::Orb {
+                return;
+            }
+            if wheel_open {
+                // 轮盘开着：不判离开也不贴回，收起后再接着看
+                off_ticks = 0;
+                continue;
+            }
+            let Ok(scale) = win.scale_factor() else {
+                return;
+            };
+            let Some(cursor) = cursor_screen_pos() else {
+                off_ticks = 0;
+                continue;
+            };
+            if geom::cursor_off_shape(
+                cursor,
+                anchor,
+                BallForm::Orb,
+                scale,
+                REDOCK_LEAVE_GAP_LOGICAL,
+            ) {
+                off_ticks += 1;
+            } else {
+                off_ticks = 0;
+            }
+            if off_ticks < REDOCK_LEAVE_TICKS {
+                continue;
+            }
+            // 兜底：这几拍之间球可能被挪出贴边带（拖动会直接取消本看门狗，这里只是保险）
+            let Some(mon) = monitor_for(&app, anchor) else {
+                return;
+            };
+            if !geom::should_dock(
+                BallForm::Orb,
+                anchor,
+                mon,
+                scale,
+                geom::DOCK_EDGE_MARGIN_LOGICAL,
+            ) {
+                return;
+            }
+            log::info!(
+                "自动贴回：鼠标离开悬浮球，形态 → tab，锚点 ({}, {})",
+                anchor.x,
+                anchor.y
+            );
+            if let Err(err) = set_form(&app, true) {
+                log::warn!("自动贴回失败: {err}");
+            }
+            if let Err(err) = persist(&app) {
+                log::warn!("保存悬浮球状态失败: {err}");
+            }
+            return;
+        }
+    });
+}
+
 // ------------------------------------------------------------------ 轮盘
 
 /// 展开 / 收起 HUD 轮盘。
@@ -529,6 +887,8 @@ pub fn set_wheel(app: &AppHandle, open: bool) -> Result<BallSnapshot, String> {
     let Some(win) = app.get_webview_window(BALL_LABEL) else {
         return Ok(snapshot(app));
     };
+    // 轮盘要重摆窗口：正在跑的贴边滑入动画立刻作废（它只该在收起态发生）
+    cancel_anim(app);
     let (anchor, collapsed) = with_inner(app, |inner| (inner.anchor, inner.win))
         .ok_or("悬浮球状态未注册")?;
     if is_wheel_open(app) == open {
@@ -619,6 +979,9 @@ pub fn close_wheel_now(app: &AppHandle) -> Result<(), String> {
 
 /// 藏起悬浮入口（含轮盘）
 pub fn hide(app: &AppHandle) -> Result<(), String> {
+    // 藏之前把两条看门狗都停掉：否则它们可能在窗口藏起来之后还去动几何
+    cancel_redock(app);
+    cancel_anim(app);
     close_wheel_now(app)?;
     if let Some(ball) = app.get_webview_window(BALL_LABEL) {
         ball.hide().map_err(|e| format!("隐藏悬浮球失败: {e}"))?;
@@ -674,6 +1037,8 @@ pub fn on_scale_changed(app: &AppHandle, label: &str) -> Result<(), String> {
     let Some(win) = app.get_webview_window(BALL_LABEL) else {
         return Ok(());
     };
+    // DPI 变了，正在跑的滑入动画按旧尺寸算出来的落点就不对了：先作废
+    cancel_anim(app);
     let scale = win
         .scale_factor()
         .map_err(|e| format!("读取悬浮球缩放失败: {e}"))?;
@@ -685,7 +1050,7 @@ pub fn on_scale_changed(app: &AppHandle, label: &str) -> Result<(), String> {
         .map_err(|e| format!("读取悬浮球位置失败: {e}"))?;
     let form = with_inner(app, |inner| inner.form).unwrap_or(BallForm::Orb);
     let anchor = geom::anchor_of(pos, size);
-    let (side, anchor) = normalize(form, anchor, monitor_for(app, anchor), scale);
+    let (side, anchor) = normalize_shape(form, anchor, monitor_for(app, anchor), scale);
     let target = geom::window_pos(anchor, size);
     if target != pos {
         win.set_position(target)
@@ -710,4 +1075,27 @@ pub fn on_scale_changed(app: &AppHandle, label: &str) -> Result<(), String> {
     );
     emit_form(app);
     persist(app)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::geom::{ORB_LOGICAL, TAB_H_LOGICAL};
+    use super::*;
+
+    /// 自动贴回的离开阈值必须大于「胶囊比球高出来的那半截」（6px）：
+    /// 否则贴回那一刻光标正好落在胶囊上，前端悬停又把胶囊唤回常规态 → 来回闪。
+    #[test]
+    fn redock_leave_gap_clears_the_tab_overshoot() {
+        let overshoot = (TAB_H_LOGICAL - ORB_LOGICAL) / 2.0;
+        assert!(
+            REDOCK_LEAVE_GAP_LOGICAL > overshoot,
+            "离开阈值 {REDOCK_LEAVE_GAP_LOGICAL} 必须大于胶囊比球高出来的 {overshoot}"
+        );
+    }
+
+    /// 滑入动画至少要走两步，一步就退化成瞬移了
+    #[test]
+    fn dock_animation_has_multiple_steps() {
+        assert!(DOCK_ANIM_MS / DOCK_ANIM_STEP_MS >= 2);
+    }
 }

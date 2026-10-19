@@ -9,6 +9,7 @@ pub mod models;
 pub mod pins;
 pub mod settings;
 pub mod storage;
+pub mod tray;
 pub mod util;
 pub mod viewer;
 
@@ -578,11 +579,42 @@ fn smoke_wheel(app: &tauri::AppHandle) -> i32 {
     }
 }
 
-/// `--smoke-dock` 的实现：验证「拖动松手 → 吸附判定」这条链路。
+/// 冒烟用：当前光标的物理坐标（拿不到返回 None）
+fn smoke_cursor_pos() -> Option<(i32, i32)> {
+    #[repr(C)]
+    struct Pt {
+        x: i32,
+        y: i32,
+    }
+    unsafe extern "system" {
+        fn GetCursorPos(lp_point: *mut Pt) -> i32;
+    }
+    let mut pt = Pt { x: 0, y: 0 };
+    if (unsafe { GetCursorPos(&mut pt) }) != 0 {
+        Some((pt.x, pt.y))
+    } else {
+        None
+    }
+}
+
+/// 冒烟用：把光标挪到物理坐标（失败返回 false）
+fn smoke_move_cursor(x: i32, y: i32) -> bool {
+    unsafe extern "system" {
+        fn SetCursorPos(x: i32, y: i32) -> i32;
+    }
+    (unsafe { SetCursorPos(x, y) }) != 0
+}
+
+/// `--smoke-dock` 的实现：验证三条与贴边相关的链路。
 ///
-/// 走的是和真拖动一样的两步：`begin_drag` 起看门狗 → 看门狗发现左键是松的 → 停稳后
-/// 调 `finish_drag`。冒烟时左键本来就是松的，所以它立刻就会收尾 —— 正好覆盖
-/// 「拖动结束时到底有没有判定」这段最容易丢的链路（真机上出过：拖到边上不贴边）。
+/// 1. **拖动松手 → 吸附判定**：走的是和真拖动一样的两步（`begin_drag` 起看门狗 →
+///    看门狗发现左键是松的 → 停稳后调 `finish_drag`）。冒烟时左键本来就是松的，所以它
+///    立刻就会收尾 —— 正好覆盖「拖动结束时到底有没有判定」这段最容易丢的链路
+///    （真机上出过：拖到边上不贴边）。
+/// 2. **悬停唤出 → 离屏幕边留余量**：球右沿必须是 `right - inset`，整块在屏内。
+/// 3. **鼠标离开 → 自动贴回**：把真实光标挪到屏幕左侧，等看门狗把球滑回胶囊，
+///    跑完恢复光标。sandbox 里挪不动光标就记 warn 跳过这条断言（跟 `--smoke-panel`
+///    对 `SetForegroundWindow` 的降级一致）。
 fn smoke_dock(app: &tauri::AppHandle) -> i32 {
     use tauri::Manager;
 
@@ -598,10 +630,12 @@ fn smoke_dock(app: &tauri::AppHandle) -> i32 {
     let origin = mon.position();
     let msize = mon.size();
     let right = origin.x + msize.width as i32;
+    let bottom = origin.y + msize.height as i32;
     let mid_y = origin.y + msize.height as i32 / 2;
     let win = ball.outer_size().unwrap_or_default();
     let orb_half = ballhub::geom::shape_size(ballhub::geom::BallForm::Orb, scale).0 / 2;
     let tab_half = ballhub::geom::shape_size(ballhub::geom::BallForm::Tab, scale).0 / 2;
+    let inset = ballhub::geom::to_physical(ballhub::geom::UNDOCK_EDGE_INSET_LOGICAL, scale);
 
     let mut failures: Vec<String> = Vec::new();
 
@@ -626,7 +660,7 @@ fn smoke_dock(app: &tauri::AppHandle) -> i32 {
             target.x,
             target.y
         );
-        // 真链路：起看门狗 → 左键是松的 → 停 120ms → finish_drag
+        // 真链路：起看门狗 → 左键是松的 → 停 120ms → finish_drag → 120ms 滑入动画
         ballhub::begin_drag(app);
         std::thread::sleep(std::time::Duration::from_millis(500));
         let snap = ballhub::snapshot(app);
@@ -665,8 +699,112 @@ fn smoke_dock(app: &tauri::AppHandle) -> i32 {
             snap.anchor_x, expect_x
         ));
     }
+    // 滑入动画必须真的落到目标位置（不能停在半路）
+    let expect_pos = ballhub::geom::window_pos(
+        ballhub::geom::Anchor::new(snap.anchor_x, snap.anchor_y),
+        win,
+    );
+    let pos_after = ball.outer_position().unwrap_or_default();
+    if expect_pos != pos_after {
+        failures.push(format!(
+            "贴边后窗口没落在目标位置：@({}, {}) vs @({}, {})",
+            pos_after.x, pos_after.y, expect_pos.x, expect_pos.y
+        ));
+    }
 
-    // ② 屏幕中间松手 → 不该吸（回差带之外）
+    // ② 悬停唤出常规球：球要离屏幕边留 6px（角标 / hover 描边 / 投影不被切）
+    if let Err(err) = ballhub::set_form(app, false) {
+        failures.push(format!("切常规态失败 {err}"));
+    } else {
+        let orb = ballhub::snapshot(app);
+        let size = ball.outer_size().unwrap_or_default();
+        let pos = ball.outer_position().unwrap_or_default();
+        log::info!(
+            "--smoke-dock 悬停唤出：形态 {}，锚点 ({}, {})，窗口 {}×{} @({}, {})",
+            orb.form.name(),
+            orb.anchor_x,
+            orb.anchor_y,
+            size.width,
+            size.height,
+            pos.x,
+            pos.y
+        );
+        if orb.form != ballhub::geom::BallForm::Orb {
+            failures.push(format!("悬停唤出后形态不是 orb（{}）", orb.form.name()));
+        }
+        let orb_right = orb.anchor_x + orb_half;
+        if (orb_right - (right - inset)).abs() > 1 {
+            failures.push(format!(
+                "常规球没离右边留 {inset}px：右沿 {} vs 期望 {}",
+                orb_right,
+                right - inset
+            ));
+        }
+        if orb.anchor_x - orb_half < origin.x || orb_right > right {
+            failures.push(format!("常规球越出屏幕左右：锚点 {}", orb.anchor_x));
+        }
+        if orb.anchor_y - orb_half < origin.y || orb.anchor_y + orb_half > bottom {
+            failures.push(format!("常规球越出屏幕上下：锚点 {}", orb.anchor_y));
+        }
+        let expect_pos = ballhub::geom::window_pos(
+            ballhub::geom::Anchor::new(orb.anchor_x, orb.anchor_y),
+            size,
+        );
+        if expect_pos != pos {
+            failures.push(format!(
+                "悬停唤出后窗口不在锚点推导的位置：@({}, {}) vs @({}, {})",
+                pos.x, pos.y, expect_pos.x, expect_pos.y
+            ));
+        }
+
+        // ③ 鼠标离开球 → 看门狗自动滑回原侧胶囊
+        let saved_cursor = smoke_cursor_pos();
+        let away_x = origin.x + msize.width as i32 / 4;
+        if smoke_move_cursor(away_x, mid_y) {
+            ballhub::arm_redock(app);
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let back = ballhub::snapshot(app);
+            let back_pos = ball.outer_position().unwrap_or_default();
+            log::info!(
+                "--smoke-dock 自动贴回：形态 {}，锚点 ({}, {})，窗口 @({}, {})",
+                back.form.name(),
+                back.anchor_x,
+                back.anchor_y,
+                back_pos.x,
+                back_pos.y
+            );
+            if back.form != ballhub::geom::BallForm::Tab {
+                failures.push("鼠标离开后没有自动贴回胶囊".into());
+            } else {
+                let expect_x = right - tab_half;
+                if (back.anchor_x - expect_x).abs() > 1 {
+                    failures.push(format!(
+                        "自动贴回的胶囊没贴住右边：锚点 {} vs 期望 {}",
+                        back.anchor_x, expect_x
+                    ));
+                }
+                let expect_pos = ballhub::geom::window_pos(
+                    ballhub::geom::Anchor::new(back.anchor_x, back.anchor_y),
+                    win,
+                );
+                if expect_pos != back_pos {
+                    failures.push(format!(
+                        "自动贴回的窗口没落在目标位置：@({}, {}) vs @({}, {})",
+                        back_pos.x, back_pos.y, expect_pos.x, expect_pos.y
+                    ));
+                }
+            }
+        } else {
+            log::warn!("--smoke-dock：挪不动光标，跳过自动贴回断言（环境限制）");
+        }
+        if let Some((x, y)) = saved_cursor {
+            if !smoke_move_cursor(x, y) {
+                log::warn!("--smoke-dock：光标没恢复回 ({x}, {y})");
+            }
+        }
+    }
+
+    // ④ 屏幕中间松手 → 不该吸（回差带之外）
     if let Err(err) = ballhub::set_form(app, false) {
         failures.push(format!("切常规态失败 {err}"));
     }
@@ -909,6 +1047,11 @@ pub fn run() {
             app.manage(ballhub::BallHubState::default());
             app.manage(DataDir(data_dir));
 
+            // 托盘：入口之一（另一条是悬浮球）。建失败不该阻断启动 —— 悬浮球还在。
+            if let Err(err) = tray::init(app.handle()) {
+                log::warn!("创建托盘图标失败: {err}");
+            }
+
             // 恢复悬浮球：尺寸摆正 → 还原锚点（形状中心）→ 按上次记录的形态落位。
             // 全部在窗口还藏着（visible:false）的时候做完，所以首帧就是最终形态，
             // 不会先闪一下常规球再变成贴边胶囊。形态不靠坐标反推 —— 常规球被钳到屏幕边时
@@ -1037,6 +1180,10 @@ pub fn run() {
             commands::update_settings,
             commands::get_data_dir,
             commands::open_data_dir,
+            commands::file_details,
+            commands::reveal_path,
+            commands::copy_text,
+            commands::file_hashes,
             commands::toggle_panel,
             commands::show_panel,
             commands::hide_panel,

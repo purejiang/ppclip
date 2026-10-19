@@ -14,7 +14,15 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
             "capture" => spawn_detached(app, "区域截图", |app| {
                 crate::capture::start_region_capture(app)
             }),
+            "fullscreen" => spawn_detached(app, "全屏截图", |app| {
+                crate::capture::capture_fullscreen(app)
+            }),
             "panel" => crate::show_panel(app),
+            "show" => {
+                if let Err(err) = crate::ballhub::show(app) {
+                    log::warn!("显示悬浮球失败: {err}");
+                }
+            }
             "hide" => {
                 // 轮盘也得一起收：只藏球的话，那扇 232×232 的置顶窗会留在屏幕上
                 if let Err(err) = crate::ballhub::hide(app) {

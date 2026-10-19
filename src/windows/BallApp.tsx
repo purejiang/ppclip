@@ -85,6 +85,11 @@ const nextPaint = () =>
  * 贴边时轮盘为了整块进屏幕会被钳向内（最多 74px），盘心因此离开球的位置 —— 中心盘
  * 就是盘心（盘里居中），**不做反向补偿**：补偿会让中心球贴到盘边上，看着像球飞了。
  * 轮盘展开时球已经藏起来了，盘心这点位移看出来的是「轮盘从球那儿往内展开」。
+ *
+ * 几何上的两件「新事」都在 Rust 侧，前端不参与，只靠 `ball:form` 吃结果：
+ * - 吸附回胶囊时窗口带 120ms ease-out 滑入（以前是瞬移，观感太突然）；
+ * - 悬停唤出的球离屏幕边留 6px（角标 / hover 描边 / 投影不被切），鼠标离开球
+ *   之后由 `arm_redock` 看门狗自动滑回原侧胶囊。
  */
 export default function BallApp() {
   const pointer = useRef<PointerState | null>(null);
@@ -304,6 +309,10 @@ export default function BallApp() {
    * 用 `event.target` 判断，而不是「进了窗口就算」—— 窗口比形状宽得多
    * （无边框窗口被 SM_CXMINTRACK 撑宽，形状只有 16 / 52 宽），
    * 光标从旁边那块透明区滑过时不该展开轮盘、也不该把那块桌面点击吃掉。
+   *
+   * 注意：**「鼠标离开球之后自动贴回胶囊」不在这里做**，由 Rust 侧
+   * `ballhub::arm_redock` 看门狗按真实光标位置收尾（窗口自己动会派假 leave，
+   * 而且「离开」是屏幕坐标判定，前端拿不到可靠的屏幕物理坐标）。
    */
   const evaluateHover = (e: React.PointerEvent) => {
     // 事件自带的按键状态最可靠：`startDragging()` 会吞掉 pointerup，光靠 onPointerUp
@@ -477,7 +486,7 @@ export default function BallApp() {
           <button
             type="button"
             className="ball-sat ball-sat-down"
-            title="隐藏悬浮球（重新启动 PPClip 可找回）"
+            title="隐藏悬浮球（托盘菜单里可找回）"
             aria-label="隐藏悬浮球"
             onClick={() => runAfterClose(api.hideBall)}
           >

@@ -2,7 +2,9 @@ use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::models::{AppSettings, Clip, ClipKind, ClipStats, Pin, UpsertOutcome};
+use crate::models::{
+    AppSettings, Clip, ClipKind, ClipStats, FileDetail, FileHashes, Pin, UpsertOutcome,
+};
 use crate::storage::Storage;
 use crate::{capture, menu, pins, util, viewer, DataDir, SelfWrite, SettingsState};
 
@@ -37,6 +39,9 @@ pub fn update_settings(
         // 设置页手里那份是打开那一刻的旧快照，整份回写会把期间切过的状态抹掉
         next.panel_pinned = current.panel_pinned;
     }
+    // 两个不透明度都钳一下：前端滑杆已经限了范围，但设置文件是用户可手改的明文
+    next.ball_opacity = next.ball_opacity.clamp(20, 100);
+    next.panel_opacity = next.panel_opacity.clamp(20, 100);
     *state.0.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     crate::settings::save_settings(&data_dir, &next)?;
 
@@ -68,6 +73,54 @@ pub fn open_data_dir(app: AppHandle) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("打开数据目录失败: {e}"))
+}
+
+// ---------------------------------------------------------------- 文件详情
+
+/// 文件条目的**现场**元信息：大小 / 修改时间 / 是否还在 / 类型说明。
+///
+/// 不做成入库字段 —— 这些是「打开详情那一刻」的事实，用户随时可能改、删、挪文件。
+/// 存快照只会显示过期信息，还会和「复制时剔掉已不存在的路径」那一套打架。
+/// 一次最多 `clipboard::MAX_FILES`(50) 条，同步 `fs::metadata` 足够快。
+#[tauri::command]
+pub fn file_details(paths: Vec<String>) -> Vec<FileDetail> {
+    paths.iter().map(|path| util::file_detail(path)).collect()
+}
+
+/// 在资源管理器里定位某个文件（选中它）。文件已被删除时资源管理器会打开它原来的目录。
+#[tauri::command]
+pub fn reveal_path(path: String) -> Result<(), String> {
+    std::process::Command::new("explorer")
+        .arg(format!("/select,{path}"))
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("打开文件所在目录失败: {e}"))
+}
+
+/// 复制任意文本（详情卡里的「复制文件名 / 复制路径 / 复制校验码」）。
+///
+/// 必须记 `SelfWrite`：不然复制出来的路径会被剪贴板监听当成一条新历史录进去 ——
+/// 用户只是在看详情，不该凭空多出一条路径文本。
+#[tauri::command]
+pub fn copy_text(app: AppHandle, text: String) -> Result<(), String> {
+    let ctx = ClipboardContext::new().map_err(|e| format!("访问剪贴板失败: {e}"))?;
+    app.state::<SelfWrite>()
+        .mark_written(util::sha256_hex(text.as_bytes()));
+    ctx.set_text(text).map_err(|e| format!("写入剪贴板失败: {e}"))
+}
+
+/// 计算文件的 **SHA-256 + MD5**，给详情卡的校验和用。
+///
+/// **按需触发**（用户点「计算校验和」），不随详情一起算：几百 MB 的镜像算一遍要好几秒，
+/// 打开详情就卡住不合适。一次读盘同时算两个算法（`util::file_hashes`）——
+/// SHA-256 做真正的完整性校验，MD5 为了和发布页 / 第三方 MD5 工具对得上。
+/// `async` + `run_off_main`：哈希是纯阻塞 IO，不能占着主线程。
+#[tauri::command]
+pub async fn file_hashes(app: AppHandle, path: String) -> Result<FileHashes, String> {
+    crate::run_off_main(app, move |_| {
+        util::file_hashes(std::path::Path::new(&path))
+    })
+    .await
 }
 
 // ------------------------------------------------------- 窗口 / 悬浮球
@@ -191,11 +244,17 @@ pub fn hub_cursor_inside(app: AppHandle) -> bool {
 
 /// 切「贴边胶囊 ↔ 常规球」。胶囊上 hover / 单击都会走到这里（稿子里的「唤出常规态」），
 /// 形态显式落盘，下次启动就照它还原（窗口尺寸已经恒定，靠尺寸反推不出来了）。
+///
+/// 悬停唤出之后顺手武装**自动贴回**看门狗：鼠标离开球、球还在贴边带里就滑回胶囊。
+/// 只在这一条真实交互路径上武装（内部 / 冒烟直接调 `ballhub::set_form` 不武装）。
 #[tauri::command]
 pub fn set_ball_docked(app: AppHandle, docked: bool) -> Result<crate::ballhub::BallSnapshot, String> {
     let snap = crate::ballhub::set_form(&app, docked)?;
     if let Err(err) = crate::ballhub::persist(&app) {
         log::warn!("保存悬浮球形态失败: {err}");
+    }
+    if !docked {
+        crate::ballhub::arm_redock(&app);
     }
     Ok(snap)
 }

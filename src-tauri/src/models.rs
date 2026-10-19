@@ -33,6 +33,12 @@ pub struct AppSettings {
     /// 面板是不是「桌面置顶」：开着 = 常驻在最上层、点外部不关；关着 = 普通窗口、
     /// 一失焦就收起（`lib.rs` 的 `WindowEvent::Focused(false)`）
     pub panel_pinned: bool,
+    /// 面板不透明度（20~100，%）
+    ///
+    /// 只调玻璃卡片的**底色**透明度（CSS 变量 `--panel-opacity`），文字 / 图标始终不透明 ——
+    /// 整窗 `opacity` 会把 12px 的中文压成灰雾，看不清。100 = **完全不透明**（卡片底色基数
+    /// 取 100%；旧版 85% 的玻璃底在桌面上仍会透出来，用户反馈「100% 还是有点透」）。
+    pub panel_opacity: i64,
 }
 
 impl Default for AppSettings {
@@ -49,6 +55,7 @@ impl Default for AppSettings {
             panel_x: None,
             panel_y: None,
             panel_pinned: false,
+            panel_opacity: 100,
         }
     }
 }
@@ -113,6 +120,47 @@ pub struct Clip {
     pub created_at: String,
     pub last_used_at: String,
     pub use_count: i64,
+}
+
+/// 文件条目里**单个文件**的详情（`commands::file_details` 的返回值，前端详情卡直接用）。
+///
+/// **不入库**：库里只存路径 JSON，这里的大小 / 修改时间 / 是否还在都是
+/// 打开详情那一刻现场 `fs::metadata` 读的。用户可能在两次查看之间改过、删过、挪过文件，
+/// 存一份快照只会显示过期信息（还会和「复制时剔掉已不存在的路径」那一套打架）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDetail {
+    /// 原始路径（大小写、分隔符都不动，直接给资源管理器 / 复制路径用）
+    pub path: String,
+    /// 文件名（路径最后一段）
+    pub name: String,
+    /// 所在目录（没有目录部分就是空串）
+    pub dir: String,
+    /// 大写扩展名；没有扩展名 / 文件夹 = 空串
+    pub ext: String,
+    /// 中文类型说明（`PDF 文档` / `图片` / `文件夹` / `文件` …）
+    pub kind: String,
+    /// 按扩展名猜的 MIME（详情页页脚用；文件夹是 `inode/directory`）
+    pub mime: String,
+    /// 字节数；文件夹或已被删除 = 0
+    pub size: i64,
+    /// 修改时间（RFC3339，本地时区）；读不到就是 None
+    pub modified: Option<String>,
+    /// 文件还在不在。不在时界面上要如实提示（复制会被后端拒绝，这里先让用户看见）
+    pub exists: bool,
+    /// 是不是文件夹（资源管理器可以只复制一个文件夹）
+    pub is_dir: bool,
+}
+
+/// 单个文件的两种校验和（`commands::file_hashes` 的返回值，详情卡里并排显示）。
+///
+/// 同时给 SHA-256 与 MD5：SHA-256 用来做可信的完整性比对，MD5 是为了和发布页 /
+/// 第三方 MD5 工具对得上（MD5 已能构造碰撞，别拿它当安全校验）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHashes {
+    pub sha256: String,
+    pub md5: String,
 }
 
 /// 一条桌面贴图
