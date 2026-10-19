@@ -269,7 +269,7 @@ export default function SettingsPage({ onChanged }: Props) {
           onChange={(e) => void patch({ panelOpacity: Number(e.target.value) || 100 })}
         />
         <span className="settings-hint">
-          只影响面板的玻璃底色；100% 完全不透明，文字始终清晰
+          往右拉更实（100% 完全不透明），往左玻璃感更强；只影响底色，文字始终清晰
         </span>
       </section>
 
