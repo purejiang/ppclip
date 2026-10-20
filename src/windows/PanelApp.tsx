@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { api, dataDir } from "../api";
@@ -62,12 +63,18 @@ export default function PanelApp() {
   /** 面板不透明度（%）：只调玻璃卡片底色，100 = 完全不透明，见 styles 里的 `--panel-opacity` */
   const [panelOpacity, setPanelOpacity] = useState(100);
   const [clearing, setClearing] = useState(false);
+  /** 应用版本（页脚显示），从 tauri.conf.json 的 version 取，别再手写死 */
+  const [version, setVersion] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const clipListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => {});
   }, []);
 
   // 确认删除的状态 3 秒后自动撤销，别一直挂在那
@@ -460,7 +467,7 @@ export default function PanelApp() {
 
       <footer className="app-footer">
         <div className="app-footer-group">
-          <span>PPClip v0.1</span>
+          <span>{version ? `PPClip v${version}` : "PPClip"}</span>
           <span className="app-footer-dot" aria-hidden="true" />
           <span>
             {stats

@@ -1,6 +1,6 @@
 [package]
 name = "ppclip"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lightweight clipboard history, screenshot and desktop pinning for Windows"
 authors = ["purejiang"]
 license = "MIT"
