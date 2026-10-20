@@ -459,4 +459,7 @@ cd src-tauri && cargo check   # Rust 类型检查
 ## 发布
 
 沿用 openstart：`dev` 日常开发，`main` 只接收合并；tag 打在 `main` 上
-（`git tag -a vX.Y.Z` + `git push`），打包后建 GitHub Release。
+（`git tag -a vX.Y.Z` + `git push`）。推 tag 后 `.github/workflows/release.yml`
+会在 `windows-latest` 上自动构建 NSIS 并创建 GitHub Release —— 版本号取自
+`tauri.conf.json`，tag 必须写成 `vX.Y.Z`，两边要对得上。
+需要手动发布时：`npm run tauri:build` 打包后 `gh release create vX.Y.Z ...` 上传安装包。
