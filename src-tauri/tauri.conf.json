@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "PPClip",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.purejiang.ppclip",
   "build": {
     "frontendDist": "../dist",
@@ -14,8 +14,8 @@
       {
         "label": "ball",
         "title": "PPClip",
-        "width": 56,
-        "height": 56,
+        "width": 16,
+        "height": 96,
         "resizable": false,
         "decorations": false,
         "transparent": true,
@@ -28,12 +28,13 @@
         "label": "main",
         "title": "PPClip",
         "width": 420,
-        "height": 560,
+        "height": 600,
         "resizable": false,
         "decorations": false,
-        "transparent": false,
-        "alwaysOnTop": true,
+        "transparent": true,
+        "alwaysOnTop": false,
         "skipTaskbar": true,
+        "shadow": false,
         "center": true,
         "visible": false
       }

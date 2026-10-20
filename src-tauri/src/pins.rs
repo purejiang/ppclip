@@ -31,6 +31,9 @@ pub fn default_geometry(app: &AppHandle, clip: &Clip) -> (i32, i32, i32, i32, f6
             )
         }
         ClipKind::Text => (TEXT_PIN_W, TEXT_PIN_H, 1.0),
+        // 文件条目根本走不到这里（`commands::create_pin_impl` 会先拒掉），
+        // 留个和文本一样的固定卡片只为让 match 闭合
+        ClipKind::File => (TEXT_PIN_W, TEXT_PIN_H, 1.0),
     };
     w = w.max(PIN_MIN_W);
     h = h.max(24);

@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "PPClip v__VERSION__"
+          releaseBody: |
+            Windows 剪贴板历史 + 截图 + 桌面贴图小工具。
+
+            **安装**：下载下方 `PPClip_*_x64-setup.exe` 运行即可（当前用户安装，无需管理员权限）。
+            安装包未签名，Windows SmartScreen 可能提示「未知发布者」，选择「仍要运行」。
+
+            使用说明见 [README](https://github.com/purejiang/ppclip#readme)。
+          releaseDraft: false
+          prerelease: false

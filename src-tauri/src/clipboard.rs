@@ -15,8 +15,11 @@ use crate::SettingsState;
 
 /// 轮询间隔。300ms 在「感知即时」与「空载开销」之间比较平衡。
 const POLL_INTERVAL_MS: u64 = 300;
-/// 超过 1MB 的文本直接丢弃，不入库也不落盘
+/// 文本上限：超过 1MB 的文本直接丢弃，不入库也不落盘
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
+/// 一次最多记多少个文件。资源管理器里「全选整个目录」会给出上万条路径，
+/// 那种东西既没人会拿来粘贴、又会把预览和指纹算爆。
+const MAX_FILES: usize = 200;
 /// 图片像素上限，超过先等比缩小（8K 图约 3300 万像素）
 const MAX_IMAGE_PIXELS: u64 = 40_000_000;
 /// 自身写入的抑制窗口：图片被重新编码后哈希对不上，靠时间窗兜底
@@ -109,6 +112,12 @@ impl ClipWatcher {
             return Ok(());
         }
 
+        // 文件必须**先于文本**判定：资源管理器复制文件时会同时放出路径文本，
+        // 先看文本就会把「复制三个文件」记成一条路径文本。反过来不成立
+        // （普通文本复制不会带 CF_HDROP），所以这个顺序是安全的。
+        if ctx.has(ContentFormat::Files) {
+            return self.store_files(&ctx);
+        }
         if let Some(text) = read_text(&ctx) {
             return self.store_text(&text);
         }
@@ -116,6 +125,32 @@ impl ClipWatcher {
             return self.store_image(&ctx);
         }
         Ok(())
+    }
+
+    fn store_files(&self, ctx: &ClipboardContext) -> Result<(), String> {
+        let raw = ctx.get_files().map_err(|e| e.to_string())?;
+        let paths = util::normalize_files(&raw);
+
+        if paths.is_empty() {
+            return Ok(());
+        }
+        if paths.len() > MAX_FILES {
+            log::info!("一次复制了 {} 个文件，超过上限 {MAX_FILES}，跳过入库", paths.len());
+            return Ok(());
+        }
+
+        // 指纹与 `commands::write_to_clipboard` 的 `mark_written` 用同一个函数：
+        // 归一化 + 同一套 JSON 序列化，两边算出来的 hash 必须一致（否则复制历史会被重录）
+        let hash = util::files_key(&paths);
+        if self.is_self_write(&hash) {
+            return Ok(());
+        }
+
+        let outcome = {
+            let storage = self.storage()?;
+            storage.upsert_files(&paths, "clipboard")?
+        };
+        self.finish(outcome)
     }
 
     fn store_text(&self, text: &str) -> Result<(), String> {

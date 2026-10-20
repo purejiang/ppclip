@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { api } from "../api";
+import { IconCheck, IconClose } from "../components/icons";
 
 interface Rect {
   x: number;
@@ -278,9 +279,11 @@ export default function OverlayApp() {
             className="overlay-btn overlay-btn--primary"
             onClick={confirm}
           >
+            <IconCheck size={14} />
             确定 (Enter)
           </button>
           <button type="button" className="overlay-btn" onClick={cancel}>
+            <IconClose size={14} />
             取消 (Esc)
           </button>
         </div>

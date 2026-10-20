@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PPClip</title>
+    <style>
+      /* 打包后的 CSS 加载前先铺透明底。main / viewer / ball / pin 都是透明窗口，
+         WebView2 的默认白底会在第一帧闪一下（它们都是挂载后才显示的，但别赌这个时间差）。
+         `color-scheme: dark` 顺手把原生滚动条 / 输入框控件也压成深色。 */
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        color-scheme: dark;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

@@ -1,16 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { api, dataDir } from "../api";
 import ClipRow from "../components/ClipRow";
-import SettingsSheet from "../components/SettingsSheet";
+import SettingsPage from "../components/SettingsPage";
+import {
+  IconArrowBack,
+  IconClipboardArrow,
+  IconClose,
+  IconEraser,
+  IconGear,
+  IconKeepOnTop,
+  IconMonitor,
+  IconScan,
+  IconSearch,
+} from "../components/icons";
 import type { Clip, ClipStats, KindFilter } from "../types";
 
+/** 筛选：稿子里是 All / Text / Images / Files，四种都有对应条目类型 */
 const FILTERS: { key: KindFilter; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "text", label: "文本" },
   { key: "image", label: "图片" },
+  { key: "file", label: "文件" },
 ];
 
 function formatBytes(bytes: number): string {
@@ -19,7 +32,14 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-/** 历史面板：搜索、筛选、键盘导航、点击即复制 */
+/**
+ * 历史面板（照 stitch 稿）：
+ *
+ * 48px 居中品牌头（左上设置 + PPCLIP + 右上 桌面置顶 / 关闭）
+ * → 搜索 + 胶囊筛选 → 扁平玻璃列表 → 状态条（脉冲点 + n / 上限 + 截图 / 清空）
+ * → 24px 页脚（Esc 关闭）。设置是同一扇窗里的第二屏（标题栏换成「← 返回 + 剪贴板设置」），
+ * 关闭按钮始终在最右侧，Esc 在设置屏只回上一层。
+ */
 export default function PanelApp() {
   const [clips, setClips] = useState<Clip[]>([]);
   const [stats, setStats] = useState<ClipStats | null>(null);
@@ -34,11 +54,27 @@ export default function PanelApp() {
   const [now, setNow] = useState(() => Date.now());
   /** 正在等第二次点击确认删除的条目 id */
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
+  /** 已经贴在桌面上的条目 id（浮窗按钮据此点亮 / 变成取消贴图） */
+  const [pinnedIds, setPinnedIds] = useState<number[]>([]);
+  /** 历史条目上限，状态条显示 `n / 上限` */
+  const [maxItems, setMaxItems] = useState(300);
+  /** 面板是否「桌面置顶」（常驻最上层 + 点外部不关） */
+  const [pinned, setPinned] = useState(false);
+  /** 面板不透明度（%）：只调玻璃卡片底色，100 = 完全不透明，见 styles 里的 `--panel-opacity` */
+  const [panelOpacity, setPanelOpacity] = useState(100);
+  const [clearing, setClearing] = useState(false);
+  /** 应用版本（页脚显示），从 tauri.conf.json 的 version 取，别再手写死 */
+  const [version, setVersion] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const clipListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => {});
   }, []);
 
   // 确认删除的状态 3 秒后自动撤销，别一直挂在那
@@ -58,14 +94,36 @@ export default function PanelApp() {
     void api.deleteClip(clip.id);
   };
 
+  /** 贴到桌面 / 取消贴图（行里那个按钮是 toggle 语义） */
+  const handlePin = async (clip: Clip) => {
+    try {
+      setError(null);
+      const pins = await api.listPins();
+      const existing = pins.find((pin) => pin.clipId === clip.id);
+      if (existing) await api.deletePin(existing.id);
+      else await api.createPin(clip.id);
+      setPinnedIds((await api.listPins()).map((pin) => pin.clipId));
+    } catch (err) {
+      setError(`贴图操作失败：${String(err)}`);
+    }
+  };
+
   const refresh = useCallback(async () => {
     try {
-      const [list, nextStats] = await Promise.all([
+      const [list, nextStats, settings, pins] = await Promise.all([
         api.listClips(debounced, kind),
         api.clipStats(),
+        api.getSettings(),
+        api.listPins().catch(() => []),
       ]);
       setClips(list);
       setStats(nextStats);
+      setMaxItems(settings.maxItems);
+      setPinned(settings.panelPinned);
+      // ?? 100：后端比前端旧时（dev 热更、半新半旧的组合）字段可能是 undefined，
+      // 直接算会得到 NaN 的 CSS 变量，把玻璃底色整个算废
+      setPanelOpacity(settings.panelOpacity ?? 100);
+      setPinnedIds(pins.map((pin) => pin.clipId));
       setActive((index) => Math.min(index, Math.max(0, list.length - 1)));
       setError(null);
     } catch (err) {
@@ -76,6 +134,13 @@ export default function PanelApp() {
   useEffect(() => {
     void dataDir().then(setDir);
   }, []);
+
+  // 面板不透明度：写进根节点的 CSS 变量，玻璃卡片 / 标题栏 / 状态条 / 页脚一起变透
+  useEffect(() => {
+    // NaN / 0 一律当 100%（写成 NaN 会让 calc 在计算值阶段失效，底色直接没了）
+    const value = panelOpacity > 0 ? panelOpacity / 100 : 1;
+    document.documentElement.style.setProperty("--panel-opacity", String(value));
+  }, [panelOpacity]);
 
   // 搜索防抖：避免每敲一个字都查一遍库
   useEffect(() => {
@@ -91,8 +156,8 @@ export default function PanelApp() {
 
   // 后端有新条目 / 贴图变化 → 刷新
   useEffect(() => {
-    const clipsChanged = listen("clips:changed", () => void refresh());
-    const pinsChanged = listen("pins:changed", () => void refresh());
+    const clipsChanged = api.onClipsChanged(() => void refresh());
+    const pinsChanged = api.onPinsChanged(() => void refresh());
     return () => {
       void clipsChanged.then((fn) => fn());
       void pinsChanged.then((fn) => fn());
@@ -112,7 +177,7 @@ export default function PanelApp() {
     };
   }, [refresh]);
 
-  // 拖动后回写位置（和悬浮球同款节流），下次唤起还记得停在哪
+  // 拖动后回写位置（节流），下次唤起还记得停在哪
   useEffect(() => {
     const win = getCurrentWindow();
     let timer: number | undefined;
@@ -138,6 +203,7 @@ export default function PanelApp() {
         else void api.hidePanel();
         return;
       }
+      if (settingsOpen) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setActive((i) => Math.min(i + 1, clips.length - 1));
@@ -157,12 +223,30 @@ export default function PanelApp() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [clips, active, settingsOpen]);
 
-  // 选中项滚动进视野
+  // 换搜索词 / 筛选：结果换了一批，选中项回到第一条、列表回顶部。
+  // 注意这跟下面的「选中项进视野」是两件事：refresh 造成的数组变化不能滚列表。
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- 搜索 / 筛选是外部输入，重置选中项
+    setActive(0);
+    clipListRef.current?.scrollTo({ top: 0 });
+  }, [debounced, kind]);
+
+  // 选中项滚动进视野：**只跟 active（以及从设置屏返回）走，别依赖 clips**。
+  // 面板每次 refresh（复制了新内容、关掉详情窗口后重新聚焦）都会拿到一个新数组，
+  // 依赖 clips 就会反复把列表滚到 active 那一条（通常是第 0 条）—— 用户「滚到底部
+  // 点开详情，关掉后跳回顶部」就是这条触发的。
   useEffect(() => {
     document
       .querySelector(".clip-row.is-active")
       ?.scrollIntoView({ block: "nearest" });
-  }, [active, clips]);
+  }, [active, settingsOpen]);
+
+  /** 单击一条：先把它设为选中（选中跟手，别只让方向键改），再看完整内容 */
+  const handleRowClick = (clip: Clip) => {
+    const index = clips.findIndex((item) => item.id === clip.id);
+    if (index >= 0) setActive(index);
+    void api.openViewer(clip.id);
+  };
 
   // 截图按钮：失败时窗口多半已经被藏起来了，把面板叫回来并把原因摆出来，
   // 否则用户看到的就是「点一下应用没了」。
@@ -176,113 +260,228 @@ export default function PanelApp() {
     }
   };
 
+  /**
+   * 桌面置顶开关：后端一次改两处 —— 窗口 `always_on_top` 与落盘的 `panelPinned`。
+   * 关掉之后面板会在失焦时自动收起（Rust 侧 `WindowEvent::Focused`），
+   * 所以开关的文案要如实说清「点外部会关」。
+   */
+  const togglePinned = async () => {
+    const next = !pinned;
+    setPinned(next);
+    try {
+      setError(null);
+      await api.setPanelPinned(next);
+    } catch (err) {
+      setPinned(!next);
+      setError(`切换桌面置顶失败：${String(err)}`);
+    }
+  };
+
+  const clearAll = async () => {
+    setClearing(true);
+    try {
+      await api.clearClips("all");
+      await refresh();
+    } catch (err) {
+      setError(`清空失败：${String(err)}`);
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
-    <div className="panel">
-      {/* deep：标题文字上也能拖；按钮是 clickable，会自己挡掉拖拽。
-          双击不去最大化（面板是固定尺寸的，且双击容易被当成拖拽） */}
+    <div className="app-card">
       <header
-        className="panel-header"
+        className="app-header"
         data-tauri-drag-region="deep"
         onDoubleClick={(e) => e.stopPropagation()}
       >
-        <span className="panel-title">PPClip</span>
-        <div className="panel-actions">
+        <div className="app-header-side">
+          {settingsOpen ? (
+            <button
+              type="button"
+              className="app-header-button"
+              title="返回历史"
+              aria-label="返回历史"
+              onClick={() => setSettingsOpen(false)}
+            >
+              <IconArrowBack size={16} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="app-header-button app-header-button--primary"
+              title="设置"
+              aria-label="设置"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <IconGear size={16} />
+            </button>
+          )}
+        </div>
+
+        <div className="app-brand">
+          {settingsOpen ? <IconGear size={16} /> : <IconClipboardArrow size={16} />}
+          {settingsOpen ? "剪贴板设置" : "PPCLIP"}
+        </div>
+
+        <div className="app-header-side app-header-side--end">
+          {!settingsOpen && (
+            <button
+              type="button"
+              className={`app-header-button app-header-button--tertiary${pinned ? " is-on" : ""}`}
+              title={
+                pinned
+                  ? "已开启桌面置顶：面板常驻最上层，点外部不会关"
+                  : "桌面置顶：常驻最上层，点外部不关闭"
+              }
+              aria-label="桌面置顶"
+              aria-pressed={pinned}
+              onClick={() => void togglePinned()}
+            >
+              <IconKeepOnTop size={16} />
+            </button>
+          )}
+          {/* 最右侧固定是关闭：设置屏也一样，Esc 才只回上一层 */}
           <button
             type="button"
-            className="icon-button"
-            title="区域截图"
-            onClick={() => void runCapture(api.startRegionCapture)}
-          >
-            截
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            title="全屏截图"
-            onClick={() => void runCapture(api.captureFullscreen)}
-          >
-            全
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            title="设置"
-            onClick={() => setSettingsOpen((open) => !open)}
-          >
-            ⚙
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            title="隐藏（Esc）"
+            className="app-header-button"
+            title={settingsOpen ? "关闭面板" : "关闭面板（Esc）"}
+            aria-label="关闭面板"
             onClick={() => void api.hidePanel()}
           >
-            ✕
+            <IconClose size={16} />
           </button>
         </div>
       </header>
 
-      <div className="panel-search">
-        <input
-          ref={searchRef}
-          className="search-input"
-          placeholder="搜索剪贴板历史…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <div className="filters">
-          {FILTERS.map((filter) => (
-            <button
-              key={filter.key}
-              type="button"
-              className={`filter${kind === filter.key ? " is-active" : ""}`}
-              onClick={() => setKind(filter.key)}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <main className="app-main">
+        <span className="app-glow app-glow--primary" aria-hidden="true" />
+        <span className="app-glow app-glow--tertiary" aria-hidden="true" />
 
-      <div className="clip-list">
-        {clips.length === 0 ? (
-          <p className="placeholder">
-            {debounced ? "没有匹配的记录" : "还没有记录：复制一段文字或一张图试试"}
-          </p>
+        {settingsOpen ? (
+          <SettingsPage
+            onChanged={() => {
+              void refresh();
+            }}
+          />
         ) : (
-          clips.map((clip, index) => (
-            <ClipRow
-              key={clip.id}
-              clip={clip}
-              dataDir={dir}
-              active={index === active}
-              now={now}
-              confirming={pendingDelete === clip.id}
-              onClick={(item) => void api.openViewer(item.id)}
-              onCopy={(item) => void api.copyClip(item.id)}
-              onDelete={handleDelete}
-              onContextMenu={(item) => void api.showClipMenu(item.id)}
-            />
-          ))
-        )}
-      </div>
+          <>
+            <div className="panel-search">
+              <label className="search-wrap">
+                <IconSearch size={16} />
+                <input
+                  ref={searchRef}
+                  className="search-input"
+                  placeholder="搜索剪贴板历史…"
+                  aria-label="搜索剪贴板历史"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </label>
+                <div className="panel-filters">
+                  <div className="filter-pills">
+                    {FILTERS.map((filter) => (
+                      <button
+                        key={filter.key}
+                        type="button"
+                        className={`filter${kind === filter.key ? " is-active" : ""}`}
+                        onClick={() => setKind(filter.key)}
+                      >
+                        {filter.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+            </div>
 
-      <footer className="panel-footer">
-        <span>
-          {stats
-            ? `${stats.total} 条 · 文本 ${stats.textCount} · 图片 ${stats.imageCount}`
-            : ""}
-        </span>
-        <span>{stats ? `图片 ${formatBytes(stats.imageBytes)}` : ""}</span>
-      </footer>
+            <div className="clip-list" ref={clipListRef}>
+              {clips.length === 0 ? (
+                <p className="placeholder">
+                  {debounced
+                    ? "没有匹配的记录"
+                    : "还没有记录：复制一段文字、一张图，或几个文件试试"}
+                </p>
+              ) : (
+                clips.map((clip, index) => (
+                  <ClipRow
+                    key={clip.id}
+                    clip={clip}
+                    dataDir={dir}
+                    active={index === active}
+                    now={now}
+                    confirming={pendingDelete === clip.id}
+                    pinned={pinnedIds.includes(clip.id)}
+                    onClick={handleRowClick}
+                    onCopy={(item) => void api.copyClip(item.id)}
+                    onPin={(item) => void handlePin(item)}
+                    onDelete={handleDelete}
+                    onContextMenu={(item) => void api.showClipMenu(item.id)}
+                  />
+                ))
+              )}
+            </div>
+
+            <div className="panel-status">
+              <div className="panel-status-group">
+                <span className="panel-status-dot" aria-hidden="true" />
+                <span className="panel-status-count">{stats?.total ?? 0}</span>
+                <span>/ {maxItems} 条上限</span>
+              </div>
+              <div className="panel-status-tools">
+                <button
+                  type="button"
+                  className="status-button"
+                  title="区域截图"
+                  aria-label="区域截图"
+                  onClick={() => void runCapture(api.startRegionCapture)}
+                >
+                  <IconScan size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="status-button"
+                  title="全屏截图"
+                  aria-label="全屏截图"
+                  onClick={() => void runCapture(api.captureFullscreen)}
+                >
+                  <IconMonitor size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="status-button status-button--danger"
+                  title="清空全部历史"
+                  aria-label="清空全部历史"
+                  disabled={clearing}
+                  onClick={() => void clearAll()}
+                >
+                  <IconEraser size={14} />
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </main>
 
       {error && <div className="panel-error">{error}</div>}
-      {settingsOpen && (
-        <SettingsSheet
-          onClose={() => setSettingsOpen(false)}
-          onChanged={() => void refresh()}
-        />
-      )}
+
+      <footer className="app-footer">
+        <div className="app-footer-group">
+          <span>{version ? `PPClip v${version}` : "PPClip"}</span>
+          <span className="app-footer-dot" aria-hidden="true" />
+          <span>
+            {stats
+              ? `${stats.textCount} 文本 · ${stats.imageCount} 图片${
+                  stats.fileCount > 0 ? ` · ${stats.fileCount} 文件` : ""
+                } · ${formatBytes(stats.imageBytes)}`
+              : "Ready"}
+          </span>
+        </div>
+        <div className="app-footer-group">
+          <span className="kbd">Esc</span>
+          <span>{settingsOpen ? "返回" : "关闭"}</span>
+        </div>
+      </footer>
     </div>
   );
 }

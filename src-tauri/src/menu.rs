@@ -4,7 +4,7 @@ use tauri::{AppHandle, Manager};
 use crate::commands;
 
 /// 菜单项 id 统一用 `<作用域>:<动作>` 或 `<作用域>:<行 id>:<动作>`：
-/// 全部走原生菜单，因为悬浮球窗口只有 56×56、贴图窗口也很小，
+/// 全部走原生菜单，因为悬浮入口只有 16×64、贴图窗口也很小，
 /// HTML 菜单会被窗口边界裁掉，原生菜单可以画在窗口之外。
 pub fn handle_menu_event(app: &AppHandle, id: &str) {
     let parts: Vec<&str> = id.split(':').collect();
@@ -14,10 +14,19 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
             "capture" => spawn_detached(app, "区域截图", |app| {
                 crate::capture::start_region_capture(app)
             }),
+            "fullscreen" => spawn_detached(app, "全屏截图", |app| {
+                crate::capture::capture_fullscreen(app)
+            }),
             "panel" => crate::show_panel(app),
+            "show" => {
+                if let Err(err) = crate::ballhub::show(app) {
+                    log::warn!("显示悬浮球失败: {err}");
+                }
+            }
             "hide" => {
-                if let Some(ball) = app.get_webview_window("ball") {
-                    let _ = ball.hide();
+                // 轮盘也得一起收：只藏球的话，那扇 232×232 的置顶窗会留在屏幕上
+                if let Err(err) = crate::ballhub::hide(app) {
+                    log::warn!("隐藏悬浮球失败: {err}");
                 }
             }
             "quit" => {

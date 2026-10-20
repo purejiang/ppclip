@@ -2760,6 +2760,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3633,12 +3643,13 @@ checksum = "4a6394b9e965e73d0a289ee54f589087e2c676aedf60885baf52c76b771e4958"
 
 [[package]]
 name = "ppclip"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "clipboard-rs",
  "image",
  "log",
+ "md-5",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3647,6 +3658,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-log",
  "tauri-plugin-single-instance",
+ "winreg",
  "xcap",
 ]
 
