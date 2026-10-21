@@ -279,6 +279,31 @@ pub fn human_bytes(bytes: i64) -> String {
     }
 }
 
+/// 只允许打开本仓库的 GitHub 链接（关于页的「前往下载」/「打开 Releases 页」）。
+///
+/// 前端只传固定常量，但命令层再挡一次：`open_url` 是通用外链入口，不能变成
+/// 「任何 URL 都能让应用去打开」的洞。
+pub fn is_allowed_url(url: &str) -> bool {
+    const REPO: &str = "https://github.com/purejiang/ppclip";
+    url == REPO || url.starts_with("https://github.com/purejiang/ppclip/")
+}
+
+/// 用默认浏览器打开本仓库的链接（关于页的「前往下载 / 打开 Releases 页」）。
+///
+/// 与 `open_data_dir` 同一套路：`explorer <url>` 会交给系统默认浏览器。
+/// 用 `run_off_main` 调用，别在 WebView2 回调栈里做进程启动。
+pub fn open_url(url: &str) -> Result<(), String> {
+    if !is_allowed_url(url) {
+        return Err(format!("不允许打开这个链接：{url}"));
+    }
+    log::info!("打开链接：{url}");
+    std::process::Command::new("explorer")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("打开链接失败: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,5 +482,20 @@ mod tests {
 
         let thumb = thumbnail_png(&image).unwrap();
         assert_eq!(&thumb[..4], &[0x89, b'P', b'N', b'G']);
+    }
+
+    #[test]
+    fn open_url_only_allows_this_repository() {
+        assert!(is_allowed_url("https://github.com/purejiang/ppclip"));
+        assert!(is_allowed_url(
+            "https://github.com/purejiang/ppclip/releases"
+        ));
+        assert!(is_allowed_url(
+            "https://github.com/purejiang/ppclip/releases/tag/v0.2.5"
+        ));
+        assert!(!is_allowed_url("http://github.com/purejiang/ppclip"));
+        assert!(!is_allowed_url("https://github.com/someone/else"));
+        assert!(!is_allowed_url("https://github.com/purejiang/ppclip-evil"));
+        assert!(!is_allowed_url("file:///C:/Windows/System32/calc.exe"));
     }
 }

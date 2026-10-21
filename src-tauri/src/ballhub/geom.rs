@@ -6,8 +6,11 @@
 //!
 //! ## 两条不变量（改这里之前先记住）
 //!
-//! 1. **收起态：形状中心 = 窗口中心**。胶囊和球都在窗口里居中，所以「窗口矩形」永远
-//!    可以由「形状中心 + 窗口尺寸」反推（`window_pos`），反过来也成立（`anchor_of`）。
+//! 1. **Orb：形状中心 = 窗口中心**；**Tab：形状在窗口朝屏幕的那条边上**，
+//!    窗口主体整块推出屏幕（见 [`window_pos_for`]）。这样贴边时屏幕上只剩
+//!    `TAB_W + SHAPE_PAD_X`，不会用一大片透明置顶窗把下层点击吃掉。
+//!    所以「窗口矩形」由「形状中心 + 形态 + 贴边侧 + 窗口尺寸」共同推导
+//!    （`window_pos_for`），反过来也成立（`anchor_of_window`）。
 //!    贴边胶囊靠把窗口横向推出屏幕来实现「形状贴住屏幕边」，形状中心本身不动 ——
 //!    所以**撑开 / 收起 / tab↔orb 切换都不许让形状中心漂走**。
 //!    （展开态是唯一的例外：那扇窗里居中装的是**盘**，盘心允许被钳离 anchor 最多 74px，
@@ -30,13 +33,20 @@ pub const TAB_H_LOGICAL: f64 = 64.0;
 pub const ORB_LOGICAL: f64 = 52.0;
 /// 展开态轮盘（稿子 State 03 是 240×240，这里按「太大了」的反馈收到 200）
 pub const WHEEL_LOGICAL: f64 = 200.0;
-/// 形状四周留出的透明余量（逻辑像素）：**投影与角标要画得下**。
+/// 收起态窗口的**竖向**透明余量（逻辑像素）：投影与角标要画得下。
 ///
-/// 竖向必须留：窗口宽度我们说了不算（`SM_CXMINTRACK` 会把无边框窗口撑宽，
-/// 形状两侧天然有富余），但**高度是我们定的** —— 只要客户区高度 = 形状高度，
-/// 形状外的每一像素都在窗口外，`.ball-orb-body` 的投影会被切得干干净净，
-/// 右上角计数角标也会被削掉上半截。
+/// 高度是我们定的：只要客户区高度 = 形状高度，形状外的每一像素都在窗口外，
+/// `.ball-orb-body` 的投影会被切得干干净净，右上角计数角标也会被削掉上半截。
 pub const SHAPE_PAD_LOGICAL: f64 = 16.0;
+/// 收起态窗口的**横向**透明余量（逻辑像素）。
+///
+/// 现在窗口宽度不再被 `SM_CXMINTRACK` 撑着（`tauri.conf.json` 的 `minWidth`
+/// 会覆盖默认最小跟踪尺寸），所以横向余量可以按「投影 + 角标 + 命中区」取小值：
+/// 8 够放下角标 5px、`.ball-orb::before` 的 4px 命中区和 hover scale。
+///
+/// **别把它调大**：贴边时窗口主体会被推出屏幕，屏幕上只剩
+/// `TAB_W + SHAPE_PAD_X`（24 逻辑像素）；这个值越大，贴边态挡住的区域越宽。
+pub const SHAPE_PAD_X_LOGICAL: f64 = 8.0;
 /// 轮盘窗口比轮盘本身大一圈（逻辑像素，四周各一份）。
 ///
 /// 200×200 的窗口装 200 的盘看着刚好，其实盘面那圈 `0 12px 40px` 的投影会被窗口边界
@@ -148,7 +158,8 @@ impl BallForm {
 }
 
 /// 胶囊贴哪一侧的屏幕边
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DockSide {
     Left,
     Right,
@@ -183,16 +194,17 @@ pub fn shape_size(form: BallForm, scale: f64) -> (i32, i32) {
     }
 }
 
-/// 收起态窗口的**期望**物理尺寸：宽度装得下最宽的形状 + 两侧余量，
-/// 高度装得下最高的形状 + 上下余量。
+/// 收起态窗口的**期望**物理尺寸：宽度装得下最宽的形状 + 两侧横向余量，
+/// 高度装得下最高的形状 + 上下竖向余量。
 ///
-/// 实际尺寸只能更宽（Windows 的 `SM_CXMINTRACK`），不会更窄；所以调用方拿到它之后
-/// 要跟**实测值**取 max，再决定要不要 `set_size` 一次（启动时窗口还藏着，看不见）。
+/// 实际尺寸只能更宽（Windows 的 `SM_CXMINTRACK`；不过 `tauri.conf.json` 的
+/// `minWidth` 会把它设成和这里一致），所以调用方拿到它之后要跟**实测值**取 max，
+/// 再决定要不要 `set_size` 一次（启动时窗口还藏着，看不见）。
 pub fn ideal_window_size(scale: f64) -> PhysicalSize<u32> {
     let widest = TAB_W_LOGICAL.max(ORB_LOGICAL);
     let tallest = TAB_H_LOGICAL.max(ORB_LOGICAL);
     PhysicalSize::new(
-        to_physical(widest + SHAPE_PAD_LOGICAL * 2.0, scale) as u32,
+        to_physical(widest + SHAPE_PAD_X_LOGICAL * 2.0, scale) as u32,
         to_physical(tallest + SHAPE_PAD_LOGICAL * 2.0, scale) as u32,
     )
 }
@@ -208,11 +220,77 @@ pub fn anchor_of(pos: PhysicalPosition<i32>, win: PhysicalSize<u32>) -> Anchor {
 /// 形状中心 + 窗口尺寸 → 窗口左上角（形状在窗口里居中）
 ///
 /// 就这一行，但它是「形状中心不动」的全部实现：tab↔orb、吸附、启动摆正都只调它。
+/// **贴边胶囊不走这里**（见 [`window_pos_for`]）：胶囊形状要贴在窗口朝屏幕的那条边上，
+/// 窗口主体整块推出屏幕，屏幕上只留 `TAB_W + SHAPE_PAD_X`。
 pub fn window_pos(anchor: Anchor, win: PhysicalSize<u32>) -> PhysicalPosition<i32> {
     PhysicalPosition::new(
         anchor.x - win.width as i32 / 2,
         anchor.y - win.height as i32 / 2,
     )
+}
+
+/// 贴边胶囊形状中心相对窗口中心的横向偏移（物理像素）。
+///
+/// 贴右边时窗口中心在形状中心右边 `offset`，贴左边时在左边；窗口因此有一大截在屏幕外，
+/// 屏幕上只剩「胶囊 + `SHAPE_PAD_X`」——这就是贴边态不再挡住下层点击的实现。
+pub fn tab_window_offset(win: PhysicalSize<u32>, scale: f64) -> i32 {
+    let shape_w = shape_size(BallForm::Tab, scale).0;
+    ((win.width as i32 - shape_w) / 2 - to_physical(SHAPE_PAD_X_LOGICAL, scale)).max(0)
+}
+
+/// 同上，但换算成**逻辑像素**（前端 CSS 的 `--tab-shift` 用它）。
+pub fn tab_shift_logical(win: PhysicalSize<u32>, scale: f64) -> f64 {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    tab_window_offset(win, scale) as f64 / scale
+}
+
+/// 形态/贴边侧 + 形状中心 → 窗口左上角。
+///
+/// - Orb：形状居中，等价于 [`window_pos`]；
+/// - Tab：窗口中心相对形状中心向**贴边那一侧的外侧**偏移
+///   [`tab_window_offset`]，让胶囊落在窗口朝屏幕的那条边上。
+pub fn window_pos_for(
+    form: BallForm,
+    side: DockSide,
+    anchor: Anchor,
+    win: PhysicalSize<u32>,
+    scale: f64,
+) -> PhysicalPosition<i32> {
+    let mut pos = window_pos(anchor, win);
+    if form == BallForm::Tab {
+        let offset = tab_window_offset(win, scale);
+        pos.x += match side {
+            DockSide::Right => offset,
+            DockSide::Left => -offset,
+        };
+    }
+    pos
+}
+
+/// [`window_pos_for`] 的逆运算：窗口左上角 + 形态/贴边侧 → 形状中心。
+///
+/// 拖动结束 / DPI 变化 / 启动恢复时靠它从窗口矩形反推形状中心；
+/// **形态和侧必须传当前状态**，否则 Tabs 会算偏 `offset`。
+pub fn anchor_of_window(
+    form: BallForm,
+    side: DockSide,
+    pos: PhysicalPosition<i32>,
+    win: PhysicalSize<u32>,
+    scale: f64,
+) -> Anchor {
+    let mut anchor = anchor_of(pos, win);
+    if form == BallForm::Tab {
+        let offset = tab_window_offset(win, scale);
+        anchor.x -= match side {
+            DockSide::Right => offset,
+            DockSide::Left => -offset,
+        };
+    }
+    anchor
 }
 
 /// 形状中心离屏幕哪一侧更近（只用于胶囊贴哪边）
@@ -439,7 +517,7 @@ mod tests {
             for form in [BallForm::Tab, BallForm::Orb] {
                 let (sw, sh) = shape_size(form, scale);
                 assert!(
-                    sw as u32 + 2 * to_physical(SHAPE_PAD_LOGICAL, scale) as u32 <= win.width,
+                    sw as u32 + 2 * to_physical(SHAPE_PAD_X_LOGICAL, scale) as u32 <= win.width,
                     "{:?} 宽放不下：形状 {} + 两侧余量 > 窗口 {}",
                     form,
                     sw,
@@ -452,6 +530,9 @@ mod tests {
                 );
             }
         }
+        // 100% 下就是 68×96；150% 下 102×144（窗口宽度不再被 SM_CXMINTRACK 撑到 200+）
+        assert_eq!(ideal_window_size(1.0), size(68, 96));
+        assert_eq!(ideal_window_size(1.5), size(102, 144));
     }
 
     /// 形状中心 → 窗口左上角 → 形状中心，必须完全还原（这是「球不跳」的机器保证）
@@ -466,27 +547,73 @@ mod tests {
         }
     }
 
-    /// 贴边胶囊：窗口被横向推出屏幕，形状正好贴住那侧屏幕边
+    /// 贴边胶囊：窗口主体被推出屏幕，屏幕上只剩「胶囊 + 横向余量」
     #[test]
     fn docked_tab_sits_flush_against_the_edge() {
-        // 窗口 136 宽、胶囊 16 宽 → 窗口左上角 = 屏幕边 − 60
-        let tab = Anchor::new(8, 500);
-        let pos = window_pos(tab, size(136, 96));
-        assert_eq!(pos.x, -60);
-        // 形状仍整块在屏幕内：0..16
-        assert_eq!(pos.x + (136 - 16) / 2, 0);
+        let win = size(136, 96);
+        let pad = to_physical(SHAPE_PAD_X_LOGICAL, 1.0);
+        let tab_w = shape_size(BallForm::Tab, 1.0).0;
 
-        // 右边缘：形状右沿贴住 1920
+        // 左边缘：胶囊在屏幕内 0..16，窗口右沿只留 pad 在屏幕内
+        let tab = Anchor::new(8, 500);
+        let pos = window_pos_for(BallForm::Tab, DockSide::Left, tab, win, 1.0);
+        assert_eq!(pos.x, -112);
+        assert_eq!(
+            pos.x + win.width as i32,
+            tab_w + pad,
+            "左贴边时窗口右沿应在胶囊右沿外 pad 处"
+        );
+
+        // 右边缘：胶囊在屏幕内 1904..1920，窗口左沿 = 1920 - (16 + 8)
         let tab_r = Anchor::new(1912, 500);
-        let pos_r = window_pos(tab_r, size(136, 96));
-        assert_eq!(pos_r.x + (136 + 16) / 2, 1920);
+        let pos_r = window_pos_for(BallForm::Tab, DockSide::Right, tab_r, win, 1.0);
+        assert_eq!(pos_r.x, 1896);
+        assert_eq!(1920 - pos_r.x, tab_w + pad);
+        assert_eq!(pos_r.x + pad, 1904, "胶囊左沿");
+        assert!(pos_r.x + win.width as i32 > 1920, "窗口主体必须在屏幕外");
 
         // 负坐标副屏（显示器在主屏左边）同样成立
         let mon = MonitorRect::new(-1920, 0, 1920, 1080);
         let tab_l = clamp_anchor(BallForm::Tab, DockSide::Left, Anchor::new(-1900, 500), mon, 1.0);
         assert_eq!(tab_l.x, -1912);
-        let pos_l = window_pos(tab_l, size(136, 96));
-        assert_eq!(pos_l.x, -1980);
+        let pos_l = window_pos_for(BallForm::Tab, DockSide::Left, tab_l, win, 1.0);
+        assert_eq!(pos_l.x, -2032);
+        assert_eq!(pos_l.x + win.width as i32, -1896);
+    }
+
+    /// 形态 + 侧 + 锚点 → 窗口位置 → 锚点，贴边两侧在多种 DPI 下都必须原样还原
+    #[test]
+    fn tab_window_pos_and_anchor_roundtrip() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let win = ideal_window_size(scale);
+            for side in [DockSide::Left, DockSide::Right] {
+                for anchor in [Anchor::new(8, 500), Anchor::new(1912, 500), Anchor::new(-50, 1030)] {
+                    let pos = window_pos_for(BallForm::Tab, side, anchor, win, scale);
+                    let back = anchor_of_window(BallForm::Tab, side, pos, win, scale);
+                    assert_eq!(back, anchor, "scale={scale} side={side:?} win={win:?}");
+                }
+                // Orb 仍按「形状中心 = 窗口中心」还原
+                let orb = Anchor::new(900, 500);
+                let pos = window_pos_for(BallForm::Orb, side, orb, win, scale);
+                assert_eq!(anchor_of_window(BallForm::Orb, side, pos, win, scale), orb);
+            }
+        }
+    }
+
+    /// 逻辑偏移与物理偏移必须同一套公式（前端 `--tab-shift` 依赖它）
+    #[test]
+    fn tab_shift_matches_the_physical_window_offset() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let win = ideal_window_size(scale);
+            let offset = tab_window_offset(win, scale);
+            let shift = tab_shift_logical(win, scale);
+            assert!(
+                (offset as f64 - shift * scale).abs() <= scale,
+                "scale={scale} offset={offset} shift={shift}"
+            );
+            // 68 宽窗口下逻辑偏移 18：胶囊左边离窗口左边 8
+            assert!((shift - (win.width as f64 / scale - 16.0) / 2.0 + SHAPE_PAD_X_LOGICAL).abs() < 0.6);
+        }
     }
 
     /// 贴边 → 常规球：球要整块留在屏幕内，而且鼠标（仍在原胶囊中心）得落在球上
@@ -661,9 +788,10 @@ mod tests {
             1.0,
         );
         assert_eq!(first, again);
+        let side = dock_side(first, SCREEN);
         assert_eq!(
-            window_pos(first, size(136, 96)),
-            window_pos(again, size(136, 96))
+            window_pos_for(BallForm::Tab, side, first, size(136, 96), 1.0),
+            window_pos_for(BallForm::Tab, side, again, size(136, 96), 1.0)
         );
     }
 

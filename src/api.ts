@@ -11,6 +11,7 @@ import type {
   FileHashes,
   KindFilter,
   Pin,
+  UpdateCheck,
 } from "./types";
 
 /**
@@ -24,6 +25,13 @@ export const api = {
     invoke<void>("update_settings", { settings }),
   getDataDir: () => invoke<string>("get_data_dir"),
   openDataDir: () => invoke<void>("open_data_dir"),
+  /** 用默认浏览器打开本仓库链接（关于页的「前往下载 / 打开 Releases 页」） */
+  openUrl: (url: string) => invoke<void>("open_url", { url }),
+  /**
+   * 检查 GitHub 最新 Release（只检测、不下载）。
+   * 后端 WinHTTP 请求，失败会返回可读错误；前端显示错误 + Releases 兜底。
+   */
+  checkLatestRelease: () => invoke<UpdateCheck>("check_latest_release"),
 
   // 窗口 / 悬浮球
   togglePanel: () => invoke<void>("toggle_panel"),

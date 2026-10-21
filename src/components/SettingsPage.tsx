@@ -7,6 +7,7 @@ import {
   IconDatabase,
   IconFolder,
   IconHistory,
+  IconInfo,
   IconPower,
 } from "./icons";
 import type { AppSettings, ClipStats } from "../types";
@@ -14,6 +15,10 @@ import type { AppSettings, ClipStats } from "../types";
 interface Props {
   /** 设置变了：面板据此刷新列表（上限 / 存储上限会影响淘汰） */
   onChanged: () => void;
+  /** 当前版本：关于卡片显示 vX.Y.Z */
+  version: string;
+  /** 打开「关于 / 版本页」 */
+  onOpenAbout: () => void;
 }
 
 /** 存储上限的快捷档位（MB）：和稿子里的 `0.1GB / 1GB / 自定义` 同一个角色 */
@@ -42,7 +47,7 @@ function formatBytes(bytes: number): string {
  * **开机自启**（写注册表 Run 键，注册表是唯一真相）。
  * 「清空全部历史」按稿子放在面板状态条上，「退出」在悬浮球右键菜单里。
  */
-export default function SettingsPage({ onChanged }: Props) {
+export default function SettingsPage({ onChanged, version, onOpenAbout }: Props) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [stats, setStats] = useState<ClipStats | null>(null);
   const [dir, setDir] = useState("");
@@ -296,6 +301,22 @@ export default function SettingsPage({ onChanged }: Props) {
           写当前用户的 Run 注册表项，不申请管理员权限
         </span>
       </section>
+
+      {/* 关于 / 版本页入口：卡片本身就是按钮，和稿子里的「关于」入口同一个位置 */}
+      <button
+        type="button"
+        className="settings-card settings-card--link"
+        onClick={onOpenAbout}
+      >
+        <span className="settings-card-head">
+          <span className="settings-label">
+            <IconInfo size={16} />
+            关于 PPClip
+          </span>
+          <span className="settings-value">{version ? `v${version}` : ""}</span>
+        </span>
+        <span className="settings-hint">版本信息、更新检测与 GitHub 仓库</span>
+      </button>
 
       {error && <div className="panel-error">{error}</div>}
     </div>

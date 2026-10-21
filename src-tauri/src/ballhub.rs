@@ -31,8 +31,10 @@
 //!
 //! 1. **anchor 是几何的唯一真相**（形状中心，物理像素）。读一次（拖动结束 / 启动）→
 //!    钳制 → 算窗口矩形 → 写回。不再「读窗口 → 算 → 写窗口」，因此不累积取整误差。
-//! 2. **收起态：形状中心 = 窗口中心**。所以只要 `window_pos(anchor, 实测尺寸)`，
-//!    撑开 / 收起 / tab↔orb / 吸附都不会让鼠标底下的东西跳走。
+//! 2. **Orb：形状中心 = 窗口中心**；**Tab：形状在窗口朝屏幕的那条边上**，
+//!    窗口主体被推出屏幕（`window_pos_for` / `anchor_of_window`）。所以贴边时
+//!    屏幕上只剩 `TAB_W + SHAPE_PAD_X`，不会再拿一大片透明置顶窗吃掉下层点击；
+//!    Orb 仍居中，悬停唤出 / 滚回中间不会引入偏移。
 //! 3. **形态由 Rust 单向决定**，前端只吃 `ball:form` 快照 + 事件（带单调递增的 `rev`）。
 //!    以前前端靠「客户区高度 >= 90/150」反推形态，读到一帧旧尺寸就挂错 CSS 类。
 //!
@@ -103,8 +105,10 @@ struct Inner {
     form: BallForm,
     side: DockSide,
     anchor: Anchor,
-    /// 收起态 ball 窗口**实测**的物理尺寸（宽度被 `SM_CXMINTRACK` 顶着，不能写死）
+    /// 收起态 ball 窗口**实测**的物理尺寸（宽度受 `SM_CXMINTRACK` / `minWidth` 影响，不能写死）
     win: Option<PhysicalSize<u32>>,
+    /// 当前 DPI 缩放：把物理偏移换算成前端 CSS 的 `--tab-shift` 要用
+    scale: f64,
     /// 轮盘是不是展开着
     wheel_open: bool,
 }
@@ -117,6 +121,7 @@ impl Default for Inner {
             side: DockSide::Left,
             anchor: Anchor::new(0, 0),
             win: None,
+            scale: 1.0,
             wheel_open: false,
         }
     }
@@ -145,8 +150,12 @@ pub struct BallSnapshot {
     pub rev: u64,
     pub form: BallForm,
     pub wheel_open: bool,
+    /// 贴边侧：前端据此把胶囊放到窗口朝屏幕的那条边上
+    pub side: DockSide,
     pub anchor_x: i32,
     pub anchor_y: i32,
+    /// 贴边胶囊在窗口内相对中心的横向偏移（逻辑像素），前端写进 `--tab-shift`
+    pub tab_shift: f64,
 }
 
 impl Default for BallSnapshot {
@@ -155,8 +164,10 @@ impl Default for BallSnapshot {
             rev: 0,
             form: BallForm::Orb,
             wheel_open: false,
+            side: DockSide::Left,
             anchor_x: 0,
             anchor_y: 0,
+            tab_shift: 0.0,
         }
     }
 }
@@ -245,8 +256,13 @@ pub fn snapshot(app: &AppHandle) -> BallSnapshot {
         rev: inner.rev,
         form: inner.form,
         wheel_open: inner.wheel_open,
+        side: inner.side,
         anchor_x: inner.anchor.x,
         anchor_y: inner.anchor.y,
+        tab_shift: inner
+            .win
+            .map(|win| geom::tab_shift_logical(win, inner.scale))
+            .unwrap_or(0.0),
     })
     .unwrap_or_default()
 }
@@ -353,27 +369,38 @@ pub fn init(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
         .scale_factor()
         .map_err(|e| format!("读取悬浮球缩放失败: {e}"))?;
 
-    // 1) 尺寸：只放宽不缩窄（Windows 的 SM_CXMINTRACK 可能已经把它撑得比理想值宽）
+    // 1) 尺寸：先把最小跟踪尺寸压到理想值，再尝试收窄。
+    //
+    // `tauri.conf.json` 的 `minWidth` 在本窗口上实测**没生效**：窗口仍被
+    // `SM_CXMINTRACK` 撑到 136，`ideal_window_size` 的 68 根本没机会用上。
+    // 所以运行时再 set_min_size + set_size 试一次（窗口还藏着，看不见）；
+    // OS 若仍拒绝，下面一律以实测为准，贴边映射不会算错。
     let measured = win
         .outer_size()
         .map_err(|e| format!("读取悬浮球尺寸失败: {e}"))?;
     let ideal = geom::ideal_window_size(scale);
-    let target = PhysicalSize::new(
-        measured.width.max(ideal.width),
-        measured.height.max(ideal.height),
-    );
-    if target != measured {
+    if measured.width > ideal.width || measured.height > ideal.height {
+        let logical = tauri::LogicalSize::new(
+            ideal.width as f64 / scale,
+            ideal.height as f64 / scale,
+        );
+        if let Err(err) = win.set_min_size(Some(tauri::Size::Logical(logical))) {
+            log::warn!("设置悬浮球最小尺寸失败: {err}");
+        }
+        std::thread::sleep(Duration::from_millis(30));
+        if let Err(err) = win.set_size(tauri::Size::Logical(logical)) {
+            log::warn!("收窄悬浮球窗口失败: {err}");
+        }
+        std::thread::sleep(Duration::from_millis(30));
         log::info!(
-            "悬浮球窗口尺寸摆正：{}×{} → {}×{}（逻辑尺寸 {}×{}）",
+            "悬浮球窗口收窄：{}×{} → 期望 {}×{}（实测 {}×{}）",
             measured.width,
             measured.height,
-            target.width,
-            target.height,
-            target.width as f64 / scale,
-            target.height as f64 / scale
+            ideal.width,
+            ideal.height,
+            win.outer_size().map(|s| s.width).unwrap_or(0),
+            win.outer_size().map(|s| s.height).unwrap_or(0),
         );
-        win.set_size(target)
-            .map_err(|e| format!("调整悬浮球尺寸失败: {e}"))?;
     }
     // 尺寸以**实测**为准：OS 可能又插一手
     let size = win
@@ -398,7 +425,8 @@ pub fn init(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
     // 3) 形态 + 钳制 + 落位（Orb 也要离屏幕边留 6px：老版本可能存了压边的 anchor）
     let form = BallForm::from_docked(settings.ball_docked);
     let (side, anchor) = normalize_shape(form, anchor, monitor_for(app, anchor), scale);
-    win.set_position(geom::window_pos(anchor, size))
+    let target = geom::window_pos_for(form, side, anchor, size, scale);
+    win.set_position(target)
         .map_err(|e| format!("调整悬浮球位置失败: {e}"))?;
 
     with_inner(app, |inner| {
@@ -407,18 +435,20 @@ pub fn init(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
         inner.side = side;
         inner.anchor = anchor;
         inner.win = Some(size);
+        inner.scale = scale;
         inner.wheel_open = false;
     });
     emit_form(app);
     log::info!(
-        "悬浮球恢复：{}，形状 {}×{}，窗口 {}×{} @({}, {})，锚点 ({}, {})",
+        "悬浮球恢复：{}（{:?}），形状 {}×{}，窗口 {}×{} @({}, {})，锚点 ({}, {})",
         form.name(),
+        side,
         geom::shape_size(form, scale).0,
         geom::shape_size(form, scale).1,
         size.width,
         size.height,
-        anchor.x - size.width as i32 / 2,
-        anchor.y - size.height as i32 / 2,
+        target.x,
+        target.y,
         anchor.x,
         anchor.y
     );
@@ -459,7 +489,9 @@ pub fn set_form(app: &AppHandle, docked: bool) -> Result<BallSnapshot, String> {
         .map_err(|e| format!("读取悬浮球位置失败: {e}"))?;
 
     let form = BallForm::Orb;
-    let anchor = geom::anchor_of(pos, size);
+    let (form_now, side_now) = with_inner(app, |inner| (inner.form, inner.side))
+        .unwrap_or((BallForm::Orb, DockSide::Left));
+    let anchor = geom::anchor_of_window(form_now, side_now, pos, size, scale);
     let (side, anchor) = normalize_shape(form, anchor, monitor_for(app, anchor), scale);
     let target = geom::window_pos(anchor, size);
     if target != pos {
@@ -473,6 +505,7 @@ pub fn set_form(app: &AppHandle, docked: bool) -> Result<BallSnapshot, String> {
         inner.side = side;
         inner.anchor = anchor;
         inner.win = Some(size);
+        inner.scale = scale;
     });
     log::info!(
         "悬浮球形态 → orb：窗口 {}×{} @({}, {}) → @({}, {})，锚点 ({}, {})（离屏幕边留 {} 逻辑像素）",
@@ -511,11 +544,13 @@ fn apply_dock(app: &AppHandle, win: &tauri::WebviewWindow) -> Result<BallSnapsho
     let pos = win
         .outer_position()
         .map_err(|e| format!("读取悬浮球位置失败: {e}"))?;
-    let anchor = geom::anchor_of(pos, size);
+    let (form_now, side_now) = with_inner(app, |inner| (inner.form, inner.side))
+        .unwrap_or((BallForm::Orb, DockSide::Left));
+    let anchor = geom::anchor_of_window(form_now, side_now, pos, size, scale);
 
     let form = BallForm::Tab;
     let (side, anchor) = normalize_shape(form, anchor, monitor_for(app, anchor), scale);
-    let target = geom::window_pos(anchor, size);
+    let target = geom::window_pos_for(form, side, anchor, size, scale);
 
     with_inner(app, |inner| {
         inner.rev += 1;
@@ -523,6 +558,7 @@ fn apply_dock(app: &AppHandle, win: &tauri::WebviewWindow) -> Result<BallSnapsho
         inner.side = side;
         inner.anchor = anchor;
         inner.win = Some(size);
+        inner.scale = scale;
     });
     log::info!(
         "贴回贴边态 → tab：形状中心 ({}, {})，窗口 @({}, {}) → @({}, {}){}",
@@ -638,8 +674,9 @@ pub fn finish_drag(app: &AppHandle) -> Result<BallSnapshot, String> {
     let pos = win
         .outer_position()
         .map_err(|e| format!("读取悬浮球位置失败: {e}"))?;
-    let anchor = geom::anchor_of(pos, size);
-    let form_now = with_inner(app, |inner| inner.form).unwrap_or(BallForm::Orb);
+    let (form_now, side_now) = with_inner(app, |inner| (inner.form, inner.side))
+        .unwrap_or((BallForm::Orb, DockSide::Left));
+    let anchor = geom::anchor_of_window(form_now, side_now, pos, size, scale);
 
     // 吸附判定用**当前形态**的形状边：球边距 ≤ 24 就吸，胶囊边距 > 24 才松手
     // （两者之间是回差带，手抖不会来回切）
@@ -681,6 +718,7 @@ pub fn finish_drag(app: &AppHandle) -> Result<BallSnapshot, String> {
         inner.side = side;
         inner.anchor = anchor;
         inner.win = Some(size);
+        inner.scale = scale;
     });
     log::info!(
         "拖动结束 → 常规球：形状中心 ({}, {})，窗口 @({}, {}) → @({}, {})",
@@ -1048,10 +1086,11 @@ pub fn on_scale_changed(app: &AppHandle, label: &str) -> Result<(), String> {
     let pos = win
         .outer_position()
         .map_err(|e| format!("读取悬浮球位置失败: {e}"))?;
-    let form = with_inner(app, |inner| inner.form).unwrap_or(BallForm::Orb);
-    let anchor = geom::anchor_of(pos, size);
+    let (form, side_now) = with_inner(app, |inner| (inner.form, inner.side))
+        .unwrap_or((BallForm::Orb, DockSide::Left));
+    let anchor = geom::anchor_of_window(form, side_now, pos, size, scale);
     let (side, anchor) = normalize_shape(form, anchor, monitor_for(app, anchor), scale);
-    let target = geom::window_pos(anchor, size);
+    let target = geom::window_pos_for(form, side, anchor, size, scale);
     if target != pos {
         win.set_position(target)
             .map_err(|e| format!("调整悬浮球位置失败: {e}"))?;
@@ -1061,6 +1100,7 @@ pub fn on_scale_changed(app: &AppHandle, label: &str) -> Result<(), String> {
         inner.side = side;
         inner.anchor = anchor;
         inner.win = Some(size);
+        inner.scale = scale;
     });
     log::info!(
         "DPI 变化（{}）：缩放 {:.2}，窗口 {}×{} @({}, {})，锚点 ({}, {})",

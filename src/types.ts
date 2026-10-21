@@ -112,6 +112,9 @@ export type WindowLabel =
 /** 收起态两种形态，与 Rust 侧 `ballhub::geom::BallForm` 一一对应 */
 export type BallForm = "tab" | "orb";
 
+/** 贴边胶囊贴哪一侧，与 Rust 侧 `ballhub::geom::DockSide` 一一对应 */
+export type DockSide = "left" | "right";
+
 /**
  * 悬浮入口的完整状态快照（`ball:form` 事件与 `ball_snapshot` 命令共用）。
  *
@@ -122,6 +125,25 @@ export interface BallSnapshot {
   rev: number;
   form: BallForm;
   wheelOpen: boolean;
+  /** 贴边侧：胶囊要放在窗口朝屏幕的那条边上 */
+  side: DockSide;
   anchorX: number;
   anchorY: number;
+  /** 胶囊相对窗口中心的横向偏移（逻辑像素），前端写进 `--tab-shift` */
+  tabShift: number;
+}
+
+/**
+ * GitHub 最新 Release 的检测结果，对应 Rust `github::UpdateCheck`。
+ *
+ * 只检测、不下载：`url` 是 Release 页，前端调用 `openUrl` 让浏览器打开。
+ */
+export interface UpdateCheck {
+  currentVersion: string;
+  latestVersion: string;
+  hasUpdate: boolean;
+  /** Release 说明（纯文本，Rust 侧已截断到 800 字符） */
+  notes: string;
+  url: string;
+  publishedAt: string | null;
 }

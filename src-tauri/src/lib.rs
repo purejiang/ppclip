@@ -3,6 +3,7 @@ pub mod ballhub;
 pub mod capture;
 pub mod clipboard;
 pub mod commands;
+pub mod github;
 pub mod logger;
 pub mod menu;
 pub mod models;
@@ -635,9 +636,22 @@ fn smoke_dock(app: &tauri::AppHandle) -> i32 {
     let win = ball.outer_size().unwrap_or_default();
     let orb_half = ballhub::geom::shape_size(ballhub::geom::BallForm::Orb, scale).0 / 2;
     let tab_half = ballhub::geom::shape_size(ballhub::geom::BallForm::Tab, scale).0 / 2;
+    let orb_w = ballhub::geom::shape_size(ballhub::geom::BallForm::Orb, scale).0;
+    let tab_w = ballhub::geom::shape_size(ballhub::geom::BallForm::Tab, scale).0;
+    let pad_x = ballhub::geom::to_physical(ballhub::geom::SHAPE_PAD_X_LOGICAL, scale);
     let inset = ballhub::geom::to_physical(ballhub::geom::UNDOCK_EDGE_INSET_LOGICAL, scale);
 
     let mut failures: Vec<String> = Vec::new();
+    // 收起窗必须已经收窄：否则常规球四周会有一大片透明置顶窗挡住点击
+    if win.width as i32 > orb_w + 2 * pad_x + 2 {
+        failures.push(format!(
+            "收起态窗口太宽：{} 物理像素（球 {} + 两侧余量 {} ≈ {}）",
+            win.width,
+            orb_w,
+            pad_x,
+            orb_w + 2 * pad_x
+        ));
+    }
 
     /// 模拟一次「拖到 anchor 处松手」：摆位 → 起看门狗 → 等它收尾
     fn drop_and_dock(
@@ -699,16 +713,35 @@ fn smoke_dock(app: &tauri::AppHandle) -> i32 {
             snap.anchor_x, expect_x
         ));
     }
-    // 滑入动画必须真的落到目标位置（不能停在半路）
-    let expect_pos = ballhub::geom::window_pos(
+    // 滑入动画必须真的落到目标位置（不能停在半路）；贴边时窗口主体必须在屏幕外，
+    // 屏幕上只剩「胶囊 + SHAPE_PAD_X」——这就是贴边态不再挡住下层点击的机器保证。
+    let expect_pos = ballhub::geom::window_pos_for(
+        ballhub::geom::BallForm::Tab,
+        ballhub::geom::DockSide::Right,
         ballhub::geom::Anchor::new(snap.anchor_x, snap.anchor_y),
         win,
+        scale,
     );
     let pos_after = ball.outer_position().unwrap_or_default();
     if expect_pos != pos_after {
         failures.push(format!(
             "贴边后窗口没落在目标位置：@({}, {}) vs @({}, {})",
             pos_after.x, pos_after.y, expect_pos.x, expect_pos.y
+        ));
+    }
+    let on_screen = right - pos_after.x;
+    if on_screen > tab_w + pad_x + 2 {
+        failures.push(format!(
+            "贴边后屏幕内还占着 {on_screen} 物理像素（应为胶囊 {tab_w} + 余量 {pad_x} ≈ {}）",
+            tab_w + pad_x
+        ));
+    }
+    if pos_after.x + win.width as i32 <= right {
+        failures.push(format!(
+            "贴边后窗口没有探出屏幕：窗口 @({}, {})，右沿 {}，屏幕右沿 {right}",
+            pos_after.x,
+            pos_after.y,
+            pos_after.x + win.width as i32
         ));
     }
 
@@ -783,14 +816,23 @@ fn smoke_dock(app: &tauri::AppHandle) -> i32 {
                         back.anchor_x, expect_x
                     ));
                 }
-                let expect_pos = ballhub::geom::window_pos(
+                let expect_pos = ballhub::geom::window_pos_for(
+                    ballhub::geom::BallForm::Tab,
+                    ballhub::geom::DockSide::Right,
                     ballhub::geom::Anchor::new(back.anchor_x, back.anchor_y),
                     win,
+                    scale,
                 );
                 if expect_pos != back_pos {
                     failures.push(format!(
                         "自动贴回的窗口没落在目标位置：@({}, {}) vs @({}, {})",
                         back_pos.x, back_pos.y, expect_pos.x, expect_pos.y
+                    ));
+                } else if right - back_pos.x > tab_w + pad_x + 2 {
+                    failures.push(format!(
+                        "自动贴回后屏幕内还占着 {} 物理像素（应为 ≤ {}）",
+                        right - back_pos.x,
+                        tab_w + pad_x
                     ));
                 }
             }
@@ -962,6 +1004,24 @@ fn smoke_panel(app: &tauri::AppHandle) -> i32 {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 诊断入口：只跑更新检测，不建窗口、不碰 WebView2。
+    // 调试「检查更新」链路时不用启动整个应用：`ppclip.exe --check-update`。
+    if std::env::args().any(|arg| arg == "--check-update") {
+        match github::check_latest(env!("CARGO_PKG_VERSION")) {
+            Ok(check) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&check).unwrap_or_else(|_| "{}".to_string())
+                );
+                std::process::exit(0);
+            }
+            Err(err) => {
+                eprintln!("检查更新失败：{err}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
 
     // 必须早于 Builder：窗口与 WebView2 的目录要在这时就定好
@@ -1180,6 +1240,8 @@ pub fn run() {
             commands::update_settings,
             commands::get_data_dir,
             commands::open_data_dir,
+            commands::open_url,
+            commands::check_latest_release,
             commands::file_details,
             commands::reveal_path,
             commands::copy_text,

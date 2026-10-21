@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "PPClip",
-  "version": "0.2.0",
+  "version": "0.2.5",
   "identifier": "com.purejiang.ppclip",
   "build": {
     "frontendDist": "../dist",
@@ -14,8 +14,10 @@
       {
         "label": "ball",
         "title": "PPClip",
-        "width": 16,
+        "width": 68,
         "height": 96,
+        "minWidth": 68,
+        "minHeight": 96,
         "resizable": false,
         "decorations": false,
         "transparent": true,
