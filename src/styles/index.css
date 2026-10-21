@@ -1,15 +1,16 @@
-/* PPClip 设计系统 —— 严格照 stitch 稿（Glacier / 深空玻璃）落地。
+/* PPClip 设计系统 —— 照 stitch 稿（Glacier / 深空玻璃）落地，0.2.5 起面板基色
+ * 从深藏青微调为中性石墨蓝（卡片基色 #131721）。
  *
  * 取色与透明度直接对应稿子里的 Tailwind token（括号里是稿子里的类名）：
- *   background                #0a0e1a   bg-background
- *   surface                   #0f1524   bg-surface        （卡片主体 bg-surface/85）
- *   surface-container-lowest  #0a0e1a   bg-surface-container-lowest
- *   surface-container-low     #111828   bg-surface-container-low
- *   surface-container         #141c2e   bg-surface-container
- *   surface-container-high    #1a2438   bg-surface-container-high
- *   surface-variant           #1a2438   bg-surface-variant
- *   on-surface                #e0e8f0 / on-surface-variant #a0b4c4
- *   outline-variant           #2a3a48 / outline #4a6070
+ *   background                #0a0d13   bg-background
+ *   surface                   #131721   bg-surface        （卡片主体，100% 不透明度时就是它）
+ *   surface-container-lowest  #0c0f16   bg-surface-container-lowest
+ *   surface-container-low     #151a24   bg-surface-container-low
+ *   surface-container         #191f2b   bg-surface-container
+ *   surface-container-high    #1f2634   bg-surface-container-high
+ *   surface-variant           #1f2634   bg-surface-variant
+ *   on-surface                #e3e8ef / on-surface-variant #9fadbc
+ *   outline-variant           #2e3846 / outline #4a5868
  *   primary                   #7dd3fc   primary-container #0e4d6e  on-primary #001f2e
  *   secondary                 #88b4cc   tertiary #c8a0f0         error #ff6b6b
  *
@@ -30,21 +31,21 @@
 :root {
   color-scheme: dark;
 
-  --background: #0a0e1a;
-  --surface: 15 21 36;
-  --surface-container-lowest: 10 14 26;
-  --surface-container-low: 17 24 40;
-  --surface-container: 20 28 46;
-  --surface-container-high: 26 36 56;
-  --surface-container-highest: 32 44 66;
-  --surface-variant: 26 36 56;
-  --surface-bright: 26 36 56;
+  --background: #0a0d13;
+  --surface: 19 23 33;
+  --surface-container-lowest: 12 15 22;
+  --surface-container-low: 21 26 36;
+  --surface-container: 25 31 43;
+  --surface-container-high: 31 38 52;
+  --surface-container-highest: 37 45 60;
+  --surface-variant: 31 38 52;
+  --surface-bright: 37 45 60;
 
-  --on-surface: #e0e8f0;
-  --on-surface-variant: #a0b4c4;
+  --on-surface: #e3e8ef;
+  --on-surface-variant: #9fadbc;
 
-  --outline: #4a6070;
-  --outline-variant: 42 58 72;
+  --outline: #4a5868;
+  --outline-variant: 46 56 70;
 
   --primary: #7dd3fc;
   --primary-rgb: 125 211 252;
@@ -60,6 +61,25 @@
   --error-rgb: 255 107 107;
   --error-container: #3d1414;
   --on-error-container: #ffb3b3;
+
+  /* 悬浮球「炫彩框」：颜色取自展开态中心按钮的 primary / tertiary，补一个 secondary
+     让 2px 环更有层次。圆形形状（球 / 中心盘）用 conic，胶囊（竖向长条）用 linear。
+     **不往外发光**：常规球 / 胶囊只保留中性投影，光晕在实机上看就是一圈糊光。 */
+  --ball-aurora: linear-gradient(
+    135deg,
+    rgb(var(--primary-rgb) / 35%) 0%,
+    var(--primary) 30%,
+    var(--tertiary) 62%,
+    var(--secondary) 82%,
+    var(--primary) 100%
+  );
+  --ball-aurora-conic: conic-gradient(
+    from 220deg,
+    var(--primary),
+    var(--tertiary) 38%,
+    var(--secondary) 68%,
+    var(--primary)
+  );
 
   font-family:
     Inter, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui,
@@ -137,6 +157,8 @@ html[data-window="overlay"] #root {
   border-radius: 16px;
   background: rgb(var(--surface) / 85%);
   color: var(--on-surface);
+  /* 顶部 1px 内高光：新基色偏中性，给玻璃卡一条很淡的上沿，卡片不至于糊成一块 */
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 4%);
   backdrop-filter: blur(40px);
 }
 
@@ -434,7 +456,7 @@ html[data-window="main"] .app-footer {
   padding: 0 48px 0 32px;
   border: none;
   border-radius: 8px;
-  background: rgb(var(--surface-container) / 60%);
+  background: rgb(var(--surface-container) / 65%);
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
   color: var(--on-surface);
   font-family: inherit;
@@ -531,7 +553,7 @@ html[data-window="main"] .app-footer {
   padding: 8px;
   border: 1px solid transparent;
   border-radius: 8px;
-  background: rgb(var(--surface-container) / 50%);
+  background: rgb(var(--surface-container) / 55%);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   color: var(--on-surface);
   text-align: left;
@@ -835,7 +857,7 @@ html[data-window="main"] .app-footer {
   gap: 10px;
   padding: 12px;
   border-radius: 12px;
-  background: rgb(var(--surface-container) / 40%);
+  background: rgb(var(--surface-container) / 50%);
   backdrop-filter: blur(12px);
 }
 
@@ -1890,7 +1912,8 @@ input[type="range"].slider::-webkit-slider-thumb {
 /* 呼吸光晕：稿子里有（`-inset-2.5 blur-md` 的主色雾），但实机看着就是一圈糊光，
    已按反馈去掉；常规态只留下面那圈 2px 渐变环。 */
 
-/* 2px 渐变环（primary/40 → primary → tertiary）+ 中性投影，不往外发光。
+/* 2px 炫彩环（primary → tertiary → secondary，和展开态中心盘同一套颜色）+
+   中性投影，不往外发光。
    投影往上要 8px、往下要 16px：靠窗口上下各 16px 的透明余量画得下（见本节开头）。 */
 .ball-orb-body {
   position: relative;
@@ -1899,12 +1922,7 @@ input[type="range"].slider::-webkit-slider-thumb {
   height: 100%;
   padding: 2px;
   border-radius: 999px;
-  background: linear-gradient(
-    45deg,
-    rgb(var(--primary-rgb) / 40%),
-    var(--primary),
-    var(--tertiary)
-  );
+  background: var(--ball-aurora-conic);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
   transition: transform 200ms cubic-bezier(0.22, 0.9, 0.3, 1.1);
 }
@@ -1936,9 +1954,16 @@ input[type="range"].slider::-webkit-slider-thumb {
   width: 16px;
   height: 64px;
   padding: 0;
-  border: 1px solid rgb(var(--primary-rgb) / 40%);
+  /* 2px 炫彩描边：padding-box 盖住内部底色，border-box 露出渐变，不用额外 DOM */
+  border: 2px solid transparent;
   border-radius: 999px;
-  background: rgb(var(--surface-container-high) / 90%);
+  background:
+    linear-gradient(
+        rgb(var(--surface-container-high) / 90%),
+        rgb(var(--surface-container-high) / 90%)
+      )
+      padding-box,
+    var(--ball-aurora) border-box;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   color: var(--primary);
   opacity: 0;
@@ -1948,6 +1973,16 @@ input[type="range"].slider::-webkit-slider-thumb {
   transition:
     opacity 180ms ease,
     transform 200ms cubic-bezier(0.22, 0.9, 0.3, 1.1);
+}
+
+/* 贴边时胶囊不再居中：窗口主体被推到屏幕外，胶囊落在窗口朝屏幕的那条边上。
+   `--tab-shift` 由 Rust 按实测窗口宽度算好（逻辑像素），见 ballhub/geom.rs。 */
+.ball-root.is-dock-right .ball-tab {
+  left: calc(50% - var(--tab-shift, 0px));
+}
+
+.ball-root.is-dock-left .ball-tab {
+  left: calc(50% + var(--tab-shift, 0px));
 }
 
 .ball-root.is-tab .ball-tab {
@@ -1964,7 +1999,7 @@ input[type="range"].slider::-webkit-slider-thumb {
   cursor: grabbing;
 }
 
-/* 三颗小点：主色、中间一颗半透明，第一颗在呼吸 */
+/* 三颗小点：每颗都用炫彩渐变（和边框同一套颜色），第一颗在呼吸 */
 .ball-tab-dots {
   display: flex;
   flex-direction: column;
@@ -1977,14 +2012,16 @@ input[type="range"].slider::-webkit-slider-thumb {
   width: 4px;
   height: 4px;
   border-radius: 999px;
-  background: var(--primary);
+  background: linear-gradient(180deg, var(--primary), var(--tertiary));
 }
 
 .ball-tab-dot--dim {
-  background: rgb(var(--primary-rgb) / 60%);
+  background: linear-gradient(180deg, var(--tertiary), var(--secondary));
+  opacity: 0.55;
 }
 
 .ball-tab-dot--pulse {
+  background: linear-gradient(180deg, var(--secondary), var(--primary));
   animation: status-pulse 2s ease-in-out infinite;
 }
 
@@ -2123,12 +2160,7 @@ input[type="range"].slider::-webkit-slider-thumb {
   padding: 2px;
   border: none;
   border-radius: 999px;
-  background: linear-gradient(
-    45deg,
-    rgb(var(--primary-rgb) / 30%),
-    var(--primary),
-    var(--tertiary)
-  );
+  background: var(--ball-aurora-conic);
   box-shadow: 0 0 24px rgb(var(--primary-rgb) / 50%);
   cursor: pointer;
   pointer-events: auto;
@@ -2167,4 +2199,345 @@ input[type="range"].slider::-webkit-slider-thumb {
   font-size: 8px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
+}
+
+/* ---------- 关于 / 版本页（面板内弹层，照 stitch 参考稿） ---------- */
+
+.about-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: rgb(var(--surface-container-lowest) / 72%);
+  backdrop-filter: blur(8px);
+  animation: about-fade-in 160ms ease;
+}
+
+.about-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 396px;
+  height: 480px;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgb(var(--outline-variant) / 30%);
+  border-radius: 12px;
+  background: rgb(var(--surface) / 92%);
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.6),
+    0 0 30px rgb(var(--primary-rgb) / 10%),
+    inset 0 1px 0 rgb(255 255 255 / 5%);
+}
+
+.about-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid rgb(var(--outline-variant) / 20%);
+  background: rgb(var(--surface-container-low) / 70%);
+  backdrop-filter: blur(12px);
+  user-select: none;
+}
+
+.about-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--on-surface);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.about-title svg {
+  color: var(--primary);
+}
+
+.about-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+/* margin:auto 在空间够时垂直居中，内容超高时自动回到顶部、正常滚动 */
+.about-body {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 20px 18px 16px;
+  text-align: center;
+}
+
+.about-icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  flex: 0 0 auto;
+  border: 1px solid rgb(var(--primary-rgb) / 30%);
+  border-radius: 16px;
+  background: rgb(var(--surface-container-high));
+  color: var(--primary);
+  box-shadow: 0 0 20px rgb(var(--primary-rgb) / 40%);
+}
+
+.about-headline {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.about-name {
+  margin: 0;
+  color: var(--on-surface);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.about-version {
+  margin: 0;
+  color: var(--on-surface-variant);
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 11px;
+}
+
+.about-check {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.about-check-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.about-status {
+  color: var(--on-surface-variant);
+  font-size: 10px;
+}
+
+.about-status--ok {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  color: var(--primary);
+}
+
+.about-status-sub {
+  display: block;
+  margin-top: 2px;
+  color: var(--on-surface-variant);
+  font-size: 9px;
+  font-weight: 400;
+}
+
+.about-update {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid rgb(var(--primary-rgb) / 20%);
+  border-radius: 10px;
+  background: rgb(var(--surface-container) / 40%);
+  text-align: left;
+}
+
+.about-update-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--on-surface);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.about-update-date {
+  color: var(--on-surface-variant);
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.about-notes {
+  margin: 0;
+  max-height: 64px;
+  overflow-y: auto;
+  color: var(--on-surface-variant);
+  font-size: 10px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.about-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.about-hint {
+  color: rgb(var(--on-surface-variant) / 80%);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.about-error {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid rgb(var(--error-rgb) / 24%);
+  border-radius: 8px;
+  background: rgb(var(--error-rgb) / 10%);
+  color: var(--on-error-container);
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: left;
+  word-break: break-word;
+}
+
+.about-error .ghost-button {
+  align-self: flex-start;
+}
+
+.about-repo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid rgb(var(--outline-variant) / 20%);
+  border-radius: 10px;
+  background: rgb(var(--surface-container) / 40%);
+  text-align: left;
+}
+
+.about-repo-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.about-repo-name {
+  color: var(--on-surface);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.about-repo-url {
+  overflow: hidden;
+  color: var(--on-surface-variant);
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.about-desc {
+  max-width: 300px;
+  margin: 0;
+  color: rgb(var(--on-surface-variant) / 80%);
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+.about-error-line {
+  margin: 0;
+  color: var(--on-error-container);
+  font-size: 10px;
+}
+
+.about-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  padding: 0 16px;
+  border-top: 1px solid rgb(var(--outline-variant) / 20%);
+  background: rgb(var(--surface-container-lowest) / 80%);
+  color: var(--on-surface-variant);
+  font-size: 9px;
+}
+
+/* 面板页脚的版本号：点击打开关于页，看起来仍是一段普通页脚文字 */
+.app-footer-version {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.app-footer-version:hover {
+  color: var(--primary);
+}
+
+/* 设置页的「关于 PPClip」卡片本身是按钮 */
+.settings-card--link {
+  width: 100%;
+  border: none;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.settings-card--link:hover {
+  background: rgb(var(--surface-container-high) / 55%);
+}
+
+.settings-card--link:focus-visible {
+  outline: 1px solid rgb(var(--primary-rgb) / 60%);
+  outline-offset: 2px;
+}
+
+/* 检查更新按钮里的圆弧箭头转圈 */
+.icon-spin {
+  animation: icon-spin 900ms linear infinite;
+}
+
+@keyframes icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes about-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }

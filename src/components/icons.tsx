@@ -234,6 +234,45 @@ export function IconPower(props: IconProps) {
   );
 }
 
+/** 关于 / 版本信息：关于页头部、设置页「关于 PPClip」卡片 */
+export function IconInfo(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="8.6" />
+      <path d="M12 11v5.4" />
+      <circle cx="12" cy="7.8" r="0.9" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}
+
+/** 检查更新 / 重新检查（圆弧箭头）；检查中给按钮加旋转动画 */
+export function IconRefresh(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M20.4 11.2a8.4 8.4 0 0 0-14.9-4.4L3.6 9" />
+      <path d="M3.6 4.4V9h4.6" />
+      <path d="M3.6 12.8a8.4 8.4 0 0 0 14.9 4.4l1.9-2.2" />
+      <path d="M20.4 19.6V15h-4.6" />
+    </Svg>
+  );
+}
+
+/**
+ * 打开外部页面（关于页「前往下载」）：方框 + 右上角向外箭头。
+ *
+ * **别用「箭头进托盘」的下载图形**：那和 `IconHide`（隐藏悬浮球）几乎一样，
+ * 一眼分不出来。下载动作发生在浏览器里，所以用「打开外链」语义更准确。
+ */
+export function IconExternalLink(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M14.4 4.4h5.2v5.2" />
+      <path d="M19.6 4.4 11 13" />
+      <path d="M18.4 14v4.4a1.8 1.8 0 0 1-1.8 1.8H5.8A1.8 1.8 0 0 1 4 18.4V7.6a1.8 1.8 0 0 1 1.8-1.8H10" />
+    </Svg>
+  );
+}
+
 /**
  * 贴到桌面：画中画（大框右下开个口 + 里面一张小窗）。
  *

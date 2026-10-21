@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import { api } from "../api";
-import type { BallForm, BallSnapshot } from "../types";
+import type { BallForm, BallSnapshot, DockSide } from "../types";
 import {
   IconClipboardArrow,
   IconHide,
@@ -125,6 +125,10 @@ export default function BallApp() {
   const lastRev = useRef(-1);
 
   const [form, setForm] = useState<BallForm>("orb");
+  /** 贴边侧：决定胶囊落在窗口的哪条边上 */
+  const [side, setSide] = useState<DockSide>("left");
+  /** 胶囊相对窗口中心的横向偏移（逻辑像素，Rust 侧按实测窗口宽度算） */
+  const [tabShift, setTabShift] = useState(0);
   /** 渲染用的展开标志（`wheelOpen` 那个 ref 只给事件回调判断，不参与渲染） */
   const [wheelShown, setWheelShown] = useState(false);
   const [stage, setStageState] = useState<Stage>("hidden");
@@ -154,6 +158,9 @@ export default function BallApp() {
     wheelOpen.current = snap.wheelOpen;
     setWheelShown(snap.wheelOpen);
     setForm(snap.form);
+    // ?? 默认值：dev 热更时前端可能比后端新，别把 undefined 写进 CSS 变量
+    setSide(snap.side ?? "left");
+    setTabShift(snap.tabShift ?? 0);
     if (!snap.wheelOpen) setStage("hidden");
     else if (nextStage) setStage(nextStage);
   };
@@ -329,11 +336,18 @@ export default function BallApp() {
     if (form === "tab") {
       if (!target?.closest(".ball-tab") || undocking.current) return;
       undocking.current = true;
-      void api
-        .setBallForm(false)
-        .then((snap) => applySnap(snap))
+      // Tab 与 Orb 的窗口中心现在差一个 `tabShift`（贴边时窗口主体被推出屏幕），
+      // 换形态时窗口会平移一下。先把内容藏掉再换，否则会看到胶囊先横跳一帧再变球。
+      // 和轮盘展开用的是同一套 `switching`（visibility: hidden）。
+      setSwitching(true);
+      void nextPaint()
+        .then(() => api.setBallForm(false))
+        .then((snap) => {
+          applySnap(snap);
+        })
         .catch((err) => console.error("唤出常规态失败", err))
         .finally(() => {
+          setSwitching(false);
           undocking.current = false;
         });
       return;
@@ -430,8 +444,13 @@ export default function BallApp() {
 
   return (
     <div
-      className={`ball-root ${formClass}${stageClass}${hiddenContent ? " is-switching" : ""}`}
-      style={{ opacity: opacity / 100 }}
+      className={`ball-root ${formClass} is-dock-${side}${stageClass}${hiddenContent ? " is-switching" : ""}`}
+      style={
+        {
+          opacity: opacity / 100,
+          "--tab-shift": `${tabShift}px`,
+        } as CSSProperties
+      }
       onPointerEnter={(e) => {
         // 展开态：指针还在轮盘范围里就算「没离开」，把待收起清掉
         if (wheelOpen.current) {

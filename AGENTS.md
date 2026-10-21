@@ -48,7 +48,8 @@ cd src-tauri && cargo check   # Rust 类型检查
 
 不引入 UI 组件库、状态管理库、i18n 库、图标字体：界面用 CSS 变量手写（同 openstart 风格），
 图标是 `src/components/icons.tsx` 里的手写 SVG。视觉稿来自 stitch 的
-「floatclip desktop manager」（Glacier 玻璃主题 + 桌面悬浮球三态规范）。
+「floatclip desktop manager」（Glacier 玻璃主题 + 桌面悬浮球三态规范）；
+0.2.5 的「关于 / 版本页」也照这份稿子的 About 弹层落地。
 
 ## 架构
 
@@ -57,7 +58,7 @@ cd src-tauri && cargo check   # Rust 类型检查
 | 文件 | 职责 | 注意 |
 |---|---|---|
 | `lib.rs` | 启动、状态注册、菜单事件、窗口事件、invoke_handler、退出钩子 | 状态必须**先** `manage` 再启动监听线程 |
-| `ballhub.rs` + `ballhub/geom.rs` | 悬浮入口三态与贴边吸附。`geom.rs` 是**纯几何**（形状尺寸 / 窗口矩形 / 吸附判定 / 轮盘摆位），不碰窗口、全部有单测；`ballhub.rs` 只负责「什么时候调哪个函数」+ 落盘 | 几何真相是 `anchor`（形状中心）而不是窗口矩形；窗口尺寸一律用**实测值**（宽度被 `SM_CXMINTRACK` 撑着，见已知问题 12）；收起态竖向留 `SHAPE_PAD_LOGICAL`=16（投影 / 角标，别删）；展开时轮盘要钳进显示器，中心盘留在盘心（别再补偿回锚点） |
+| `ballhub.rs` + `ballhub/geom.rs` | 悬浮入口三态与贴边吸附。`geom.rs` 是**纯几何**（形状尺寸 / 窗口矩形 / 吸附判定 / 轮盘摆位），不碰窗口、全部有单测；`ballhub.rs` 只负责「什么时候调哪个函数」+ 落盘 | 几何真相是 `anchor`（形状中心）而不是窗口矩形；窗口尺寸一律用**实测值**（`minWidth` 已覆盖 `SM_CXMINTRACK`，见已知问题 12）；收起态竖向留 `SHAPE_PAD_LOGICAL`=16、横向留 `SHAPE_PAD_X_LOGICAL`=8（投影 / 角标 / 命中区，别乱调大）；**Orb** 形状居中，**Tab** 形状偏移到窗口朝屏幕的那条边、窗口主体推出屏幕（`window_pos_for` / `anchor_of_window`）；展开时轮盘要钳进显示器，中心盘留在盘心（别再补偿回锚点） |
 | `clipboard.rs` | 剪贴板监听线程、内容过滤、去重入库、自身写入抑制 | `start_watch()` 阻塞，必须独立线程；**文件（CF_HDROP）必须先于文本判定**；`SelfWrite` 见下 |
 | `capture.rs` | 截图：显示器定位、冻结图、overlay 窗口、裁剪、写剪贴板入库 | `clamp_rect` 是纯函数，有单测 |
 | `storage.rs` | SQLite：建表/迁移、clips 与 pins 的 CRUD、去重、LRU 淘汰 | **最大文件**，改淘汰逻辑务必跑单测；文件条目的路径列表以 JSON 存 `clips.text`（零迁移） |
@@ -159,13 +160,15 @@ cd src-tauri && cargo check   # Rust 类型检查
     **几何真相只有 `anchor`（形状中心，物理像素）+ `form`（tab/orb）+ `wheel_open`**，
     全在 `BallHubState` 里；前端只吃 `ball:form` 快照 + 事件（带单调递增 `rev`，
     旧快照不许盖掉新事件）。四条硬约束：
-    ① **窗口位置永远由 `geom::window_pos(anchor, 实测尺寸)` 反推，不读当前窗口几何** ——
-    读一次（启动 / 拖动结束）→ 钳制 → 算矩形 → 写回，因此不累积取整误差。形状在窗口里
-    居中，所以「窗口中心 = 形状中心」让撑开 / 收起 / 形态切换都不动屏幕上的形状。
-    ② **收起态窗口尺寸恒定**：胶囊与球共用一扇窗（本机 1.5 缩放实测 202×144，宽度被
-    `SM_CXMINTRACK` 撑着，别写死），换形态只改位置 —— 单次 `set_position` 是原子的，
-    没有「先 resize 再 reposition」的半帧错位。**竖向上下的 16px 余量别删**
-    （`SHAPE_PAD_LOGICAL`）：投影与右上角标就画在那圈里，客户区一贴形状就被切平。
+    ① **窗口位置由 anchor + 形态 + 贴边侧反推**（`geom::window_pos_for` /
+    `anchor_of_window`），不读当前窗口几何。Orb 形状居中；Tab 形状落在窗口朝屏幕的那条边上，
+    窗口中心相对形状中心偏移 `tab_window_offset`，所以换形态时形状中心仍在 anchor，
+    而屏幕上只剩 `TAB_W + SHAPE_PAD_X`（24 逻辑像素）——贴边态不再吃掉下层点击。
+    ② **收起态窗口尺寸恒定**：胶囊与球共用一扇窗（`init` 里 `set_min_size` +
+    `set_size` 把创建时的 136×96 收窄到 68×96 逻辑像素，1.5 缩放实测 102×144），
+    换形态只改位置、不 resize。竖向 16px、横向 8px 余量别删
+    （`SHAPE_PAD_LOGICAL` / `SHAPE_PAD_X_LOGICAL`）：投影、角标、
+    `.ball-orb::before` 命中区就画在那圈里。
     ③ **展开轮盘时窗口换成 232×232**（200 的盘 + 四周各 16，`0 12px 40px` 的投影要画得下）。
     换尺寸 / 换位置仍是两次 OS 调用，中间必有一帧按旧窗口中心绘制 —— **这一帧由前端遮掉**：
     `BallApp` 的 `switching` 把内容 `visibility: hidden`。注意 **`setSwitching(true)` 只是排了
@@ -264,9 +267,18 @@ cd src-tauri && cargo check   # Rust 类型检查
 14. **样式统一在 `styles/index.css` 的 Glacier 设计系统里**（严格照 stitch 稿）：
     token 与稿子的 Tailwind 名字一一对应，带 `/xx` 透明度的存成 `R G B` 三元组，
     写法和稿子一样：`rgb(var(--surface) / 85%)` == `bg-surface/85`。
-    底色 `background #0a0e1a` → `surface #0f1524`（卡片 `surface/85`）→ `surface-container #141c2e`；
+    底色 `background #0a0d13` → `surface #131721`（卡片主体，100% 不透明度时就是它）→
+    `surface-container #191f2b`；标题栏 `surface-container-low #151a24`、页脚
+    `surface-container-lowest #0c0f16`；描边 `outline-variant #2e3846`。
     主色 `primary #7dd3fc`、`primary-container #0e4d6e`（选中态底色）、`tertiary #c8a0f0`（贴图）、
-    `error #ff6b6b`。三条规矩：
+    `error #ff6b6b`。悬浮球三态（常规球 / 贴边胶囊 / 展开态中心盘）共用
+    `--ball-aurora`（linear，胶囊）与 `--ball-aurora-conic`（圆形球 / 中心盘）两个炫彩 token，
+    贴边三颗闪点也走同色渐变；**常规球 / 胶囊仍然不发光**，只留 2px 炫彩环 + 中性投影。
+    关于页是面板内的弹层（`components/AboutPage.tsx`，入口 = 页脚版本号 + 设置页「关于」卡），
+    检查更新走 `check_latest_release`（WinHTTP 请求 GitHub API + semver 比较），
+    **只检测、不下载安装**；「前往下载」用 `open_url` 在浏览器打开 Release 页，
+    URL 前缀由 `util::is_allowed_url` 限制。本项目**不引 updater / 不签安装包 / 不改 CI**。
+    三条规矩：
     ① **窗口 = 一张圆角玻璃卡片**（`rounded-2xl bg-surface/85 backdrop-blur-2xl border-outline-variant/30`）；
     ② **每扇窗的 main 里都有两张发光斑**（右上 `primary/10`、左下 `tertiary/10`、`blur-3xl`）——
     这是稿子里最明显的氛围光，别省；发光斑是绝对定位的，`app-main` 里其它子元素统一抬一层；
@@ -442,13 +454,16 @@ cd src-tauri && cargo check   # Rust 类型检查
 11. `hide_own_windows` 之后的任何失败路径都必须把窗口恢复回来：建 overlay 失败会回滚
     （`cancel_capture_impl`），另有 10s 看门狗兜底（overlay 没显示出来就取消并恢复）。
     改截图流程时别破坏这两条兜底 —— 球和面板一起藏起来时，用户就只剩托盘图标这一条入口了。
-12. 悬浮球窗口在 Windows 上**宽度不是我们说了算**：带 `WS_DLGFRAME` 的窗口宽度受 `SM_CXMINTRACK`
-    （本机 136）钳制，**收起态实测 202×144（1.5 缩放）**，胶囊与常规球共用这一扇窗
-    （窗口高度 = 形状 + 上下各 16px 投影余量，设计决策 13 ②）。
-    形状靠居中显示看着正常，但窗口两侧那片透明区照样吃掉点击、而且窗口置顶 ——
-    **吸附**（设计决策 13）把窗口故意推出屏幕 `(窗口宽 − 16)/2`，那块透明区大半落到屏幕外，
-    问题基本被绕掉了。展开态（232×232）只在鼠标悬停期间存在。
-    彻底解决仍要按光标位置切 `set_ignore_cursor_events`，v1 先记着。
+12. **悬浮球窗口宽度**：`tauri.conf.json` 的 `ball` 写 68×96，但 Windows 的
+    `SM_CXMINTRACK` 仍会在创建时把窗口撑到 136×96（本机 100% 缩放实测；只配
+    `minWidth` 不生效）。所以 `init` 在窗口还藏着时做一次
+    `set_min_size(68×96) + set_size(68×96)`，实测能收窄到 68×96（1.5 缩放 102×144）；
+    之后一切以实测尺寸为准。**贴边时 Tab 形状落在窗口朝屏幕的那条边上**：窗口中心
+    相对形状中心偏移 `tab_window_offset`，屏幕上只剩 `TAB_W + SHAPE_PAD_X`
+    （24 逻辑像素）——这就是贴边态不再挡住下层点击的实现；常规球仍居中，四周只有
+    8 逻辑像素横向余量。展开态（232×232）只在鼠标悬停期间存在。
+    `--smoke-dock` 会断言「贴边后屏内宽度 ≤ 胶囊 + 余量」「收起窗宽度 ≤ 球 + 2×余量」，
+    改这块先跑它。
 13. **受限令牌 / 沙箱下写 `HKCU\...\Run` 会被拒**（`拒绝访问。 (os error 5)`）：开机自启在
     正常桌面会话里没问题（已实测：把 exe 放到 `%TEMP%` 启动，开关 → 注册表出现该值、
     日志 `已开启开机自启`、再点一次能删掉）。但**从某些受限环境（写受限令牌 / 沙箱）启动

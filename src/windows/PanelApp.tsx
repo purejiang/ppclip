@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { api, dataDir } from "../api";
+import AboutPage from "../components/AboutPage";
 import ClipRow from "../components/ClipRow";
 import SettingsPage from "../components/SettingsPage";
 import {
@@ -49,6 +50,8 @@ export default function PanelApp() {
   const [active, setActive] = useState(0);
   const [dir, setDir] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 关于 / 版本页（弹层，覆盖设置屏或列表屏） */
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** 每分鐘刷新一次，让「N 分钟前」跟着走 */
   const [now, setNow] = useState(() => Date.now());
@@ -199,11 +202,13 @@ export default function PanelApp() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (settingsOpen) setSettingsOpen(false);
+        // 层级：关于 → 设置 → 收起面板
+        if (aboutOpen) setAboutOpen(false);
+        else if (settingsOpen) setSettingsOpen(false);
         else void api.hidePanel();
         return;
       }
-      if (settingsOpen) return;
+      if (aboutOpen || settingsOpen) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setActive((i) => Math.min(i + 1, clips.length - 1));
@@ -221,7 +226,7 @@ export default function PanelApp() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clips, active, settingsOpen]);
+  }, [clips, active, settingsOpen, aboutOpen]);
 
   // 换搜索词 / 筛选：结果换了一批，选中项回到第一条、列表回顶部。
   // 注意这跟下面的「选中项进视野」是两件事：refresh 造成的数组变化不能滚列表。
@@ -361,6 +366,8 @@ export default function PanelApp() {
 
         {settingsOpen ? (
           <SettingsPage
+            version={version}
+            onOpenAbout={() => setAboutOpen(true)}
             onChanged={() => {
               void refresh();
             }}
@@ -467,7 +474,15 @@ export default function PanelApp() {
 
       <footer className="app-footer">
         <div className="app-footer-group">
-          <span>{version ? `PPClip v${version}` : "PPClip"}</span>
+          <button
+            type="button"
+            className="app-footer-version"
+            title="关于 PPClip"
+            aria-label="关于 PPClip"
+            onClick={() => setAboutOpen(true)}
+          >
+            {version ? `PPClip v${version}` : "PPClip"}
+          </button>
           <span className="app-footer-dot" aria-hidden="true" />
           <span>
             {stats
@@ -482,6 +497,10 @@ export default function PanelApp() {
           <span>{settingsOpen ? "返回" : "关闭"}</span>
         </div>
       </footer>
+
+      {aboutOpen && (
+        <AboutPage version={version} onClose={() => setAboutOpen(false)} />
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 [package]
 name = "ppclip"
-version = "0.2.0"
+version = "0.2.5"
 description = "Lightweight clipboard history, screenshot and desktop pinning for Windows"
 authors = ["purejiang"]
 license = "MIT"
@@ -38,6 +38,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 log = "0.4"
+# 更新检测：把 GitHub Release 的 tag 和当前版本做语义化比较（Cargo.lock 里本来就有）
+semver = "1"
 # 开机自启：写 HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 # （tauri 自己就依赖 winreg，加进来不会多下载东西）
 winreg = "0.56"

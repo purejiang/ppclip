@@ -75,6 +75,25 @@ pub fn open_data_dir(app: AppHandle) -> Result<(), String> {
         .map_err(|e| format!("打开数据目录失败: {e}"))
 }
 
+/// 用默认浏览器打开本仓库的链接（关于页的「前往下载 / 打开 Releases 页」）。
+///
+/// 命令层再校验一次 URL 前缀（`util::is_allowed_url`），别变成通用外链入口。
+/// 进程启动放到后台线程，不在 WebView2 回调栈里做。
+#[tauri::command]
+pub async fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    crate::run_off_main(app, move |_| util::open_url(&url)).await
+}
+
+/// 检查 GitHub 最新 Release（只检测，不下载安装）。
+///
+/// WinHTTP 是阻塞调用，必须 `run_off_main`；返回 `hasUpdate` / 最新版本 / 发布说明 /
+/// Release 页地址，前端自己决定显示「已是最新」还是「发现新版本」。
+#[tauri::command]
+pub async fn check_latest_release(app: AppHandle) -> Result<crate::github::UpdateCheck, String> {
+    let current = app.package_info().version.to_string();
+    crate::run_off_main(app, move |_| crate::github::check_latest(&current)).await
+}
+
 // ---------------------------------------------------------------- 文件详情
 
 /// 文件条目的**现场**元信息：大小 / 修改时间 / 是否还在 / 类型说明。
