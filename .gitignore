@@ -33,6 +33,9 @@ src-tauri/gen/schemas/
 .omo/
 .codegraph/
 
+# 版本迭代运行时产物（raw issue JSON / 临时数据 / 日志）
+docs/iteration/.runtime/
+
 # Backup files
 *.bak
 

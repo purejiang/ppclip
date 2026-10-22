@@ -140,6 +140,8 @@ Tauri 2 · React 19 · TypeScript · Vite · Rust · rusqlite / SQLite
 
 欢迎提交 Issue 和 Pull Request。提交 PR 前建议先跑一遍 `npm run lint`、`npm run build` 和 `cd src-tauri && cargo test`。
 
+版本迭代与 issue 工作流见 [docs/iteration/PPCLIP-ITERATION.md](docs/iteration/PPCLIP-ITERATION.md)；通用阶段复用 `.agents/skills`，PPClip 只保留 adapter 与三处增量。
+
 ## License
 
 MIT
