@@ -821,6 +821,98 @@ html[data-window="main"] .app-footer {
   cursor: default;
 }
 
+/* 清空全部历史的确认层：内联在状态条上方，不是全屏 modal。
+   遮罩只挡误点，颜色很淡；确认条自己抬到遮罩上面。 */
+.panel-clear-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 44;
+  background: rgb(var(--surface-container-lowest) / 10%);
+}
+
+.app-main > .panel-clear-confirm {
+  position: relative;
+  z-index: 45;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid rgb(var(--error-rgb) / calc(30% * var(--panel-opacity)));
+  background: rgb(var(--surface-container-high) / calc(96% * var(--panel-opacity)));
+  backdrop-filter: blur(12px);
+  animation: clear-confirm-in 160ms ease;
+}
+
+.panel-clear-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.panel-clear-title {
+  color: var(--on-surface);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.panel-clear-desc {
+  color: var(--on-surface-variant);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.panel-clear-hint {
+  color: var(--on-surface-variant);
+  font-size: 9px;
+}
+
+.panel-clear-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.panel-clear-actions .ghost-button {
+  white-space: nowrap;
+}
+
+.panel-clear-actions .ghost-button:focus,
+.status-button:focus {
+  outline: 2px solid rgb(var(--primary-rgb) / 80%);
+  outline-offset: 2px;
+}
+
+.panel-clear-status {
+  top: 56px;
+  z-index: 60;
+}
+
+.panel-clear-status:empty {
+  /* Keep the live region in the accessibility tree while empty; display:none
+     would create it at the same moment as the text and defeat the announcement. */
+  opacity: 0;
+}
+
+@keyframes clear-confirm-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-clear-confirm,
+  .panel-clear-status {
+    animation: none;
+  }
+}
+
 .panel-error {
   flex: 0 0 auto;
   padding: 6px 12px;

@@ -5,6 +5,20 @@
 Windows 剪贴板历史 + 截图 + 桌面贴图小工具。入口有两个：置顶悬浮球和系统托盘图标；
 没有全局热键（v1 有意为之）。
 
+## Agent skills
+
+- **Issue tracker**：GitHub `purejiang/ppclip`；读写约定见 `docs/agents/issue-tracker.md`。
+- **Triage labels**：五个角色的实际标签映射见 `docs/agents/triage-labels.md`。
+- **Domain docs**：单上下文；`GLOSSARY.md` + 本文件「关键设计决策」，见 `docs/agents/domain.md`。
+
+## 版本迭代
+
+以 GitHub issue 为输入跑一轮迭代时，先读 `docs/iteration/PPCLIP-ITERATION.md`。通用阶段复用
+`.agents/skills` 里的 `triage` / `to-spec` / `to-tickets` / `implement-spec` / `code-review` /
+`research` / `tdd` / `retro`，不另写一套（`.agents/skills` 是本机 skill 安装，不随仓库提交；没有它时按
+skill 名称使用）；PPClip 具体配置在 `docs/iteration/PPCLIP-ADAPTER.md`，
+增量在 `INTAKE.md` / `COUNCIL.md` / `ACCEPTANCE.md`。当前 0 issue（2026-10-22），首轮走 bootstrap（见 `INTAKE.md`）。
+
 ## 关键命令
 
 ```bash

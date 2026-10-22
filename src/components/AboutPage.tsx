@@ -151,7 +151,9 @@ export default function AboutPage({ version, onClose }: Props) {
                 </span>
               )}
               {check.kind === "idle" && (
-                <span className="about-status">看看 GitHub 上有没有新版本</span>
+                <span className="about-status">
+                  会请求 GitHub 检查版本；不上传剪贴板内容，不自动下载
+                </span>
               )}
             </div>
 
@@ -226,7 +228,8 @@ export default function AboutPage({ version, onClose }: Props) {
           </div>
 
           <p className="about-desc">
-            Windows 剪贴板历史、截图与桌面贴图。离线可用，数据只保存在本机。
+            Windows 剪贴板历史、截图与桌面贴图。默认不联网；仅检查更新时请求
+            GitHub，不上传剪贴板内容。
           </p>
 
           {actionError && <p className="about-error-line">{actionError}</p>}

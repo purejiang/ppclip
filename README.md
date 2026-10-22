@@ -31,7 +31,7 @@ PPClip 是一个常驻桌面的 Windows 小工具：一个悬浮球加一枚托�
 单击悬浮球或托盘图标才会打开历史面板；复制的内容会按内容哈希去重后写入本地 SQLite，
 截图的结果同样会写回剪贴板并进入历史。
 
-数据全部保存在本机，应用不联网。
+数据全部保存在本机，不上传、不同步。应用默认不联网；仅当你点击「关于 → 检查更新」时，会请求 GitHub Releases 接口（api.github.com），只检查版本，不下载、不安装。
 
 ## 功能
 
@@ -109,7 +109,7 @@ cd src-tauri && cargo check   # Rust 类型检查
 
 ## 数据与隐私
 
-所有数据只保存在本机，不上传、不同步，应用也不发起网络请求。
+所有数据只保存在本机，不上传、不同步。应用默认不联网、不后台联网；仅当你点击「检查更新」时，会请求 GitHub Releases 接口（api.github.com），请求不包含任何剪贴板内容，也不下载或安装任何东西。
 
 默认位置：`%APPDATA%\com.purejiang.ppclip\`
 
@@ -135,10 +135,15 @@ Tauri 2 · React 19 · TypeScript · Vite · Rust · rusqlite / SQLite
 - 只记录纯文本、图片和文件列表，不保留富文本 / HTML 格式。
 - 多显示器下，选区只在光标所在的那块屏幕内完成（混合 DPI 跨屏选区未支持）。
 - 全屏独占应用（部分游戏、播放器）可能盖住悬浮球和桌面贴图。
+- 检查更新需要联网；失败不影响任何本地功能。
 
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request。提交 PR 前建议先跑一遍 `npm run lint`、`npm run build` 和 `cd src-tauri && cargo test`。
+
+版本迭代与 issue 工作流见 [docs/iteration/PPCLIP-ITERATION.md](docs/iteration/PPCLIP-ITERATION.md)；通用阶段复用 `.agents/skills`，PPClip 只保留 adapter 与三处增量。
+
+更新日志见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## License
 

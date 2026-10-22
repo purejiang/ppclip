@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -17,7 +23,7 @@ import {
   IconScan,
   IconSearch,
 } from "../components/icons";
-import type { Clip, ClipStats, KindFilter } from "../types";
+import type { Clip, ClipStats, KindFilter, Pin } from "../types";
 
 /** 筛选：稿子里是 All / Text / Images / Files，四种都有对应条目类型 */
 const FILTERS: { key: KindFilter; label: string }[] = [
@@ -31,6 +37,11 @@ function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${bytes} B`;
+}
+
+/** 等浏览器画完一帧再聚焦，避免 ref 还没挂载 */
+function focusAfterPaint(target: () => HTMLElement | null): number {
+  return window.requestAnimationFrame(() => target()?.focus());
 }
 
 /**
@@ -66,10 +77,19 @@ export default function PanelApp() {
   /** 面板不透明度（%）：只调玻璃卡片底色，100 = 完全不透明，见 styles 里的 `--panel-opacity` */
   const [panelOpacity, setPanelOpacity] = useState(100);
   const [clearing, setClearing] = useState(false);
+  /** 清空全部历史：第一次只进入确认态，确认后才真的删 */
+  const [clearConfirm, setClearConfirm] = useState(false);
+  /** 清空成功后的结果提示（role="status"） */
+  const [clearMessage, setClearMessage] = useState<string | null>(null);
+  /** 贴图列表是否成功读到：读不到时确认文案不报「0 个贴图」 */
+  const [pinsLoaded, setPinsLoaded] = useState(false);
   /** 应用版本（页脚显示），从 tauri.conf.json 的 version 取，别再手写死 */
   const [version, setVersion] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const clipListRef = useRef<HTMLDivElement>(null);
+  const eraserRef = useRef<HTMLButtonElement>(null);
+  const clearCancelRef = useRef<HTMLButtonElement>(null);
+  const clearConfirmButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -86,6 +106,13 @@ export default function PanelApp() {
     const timer = window.setTimeout(() => setPendingDelete(null), 3000);
     return () => window.clearTimeout(timer);
   }, [pendingDelete]);
+
+  // 清空成功的提示 2.4 秒后自动收起
+  useEffect(() => {
+    if (!clearMessage) return;
+    const timer = window.setTimeout(() => setClearMessage(null), 2400);
+    return () => window.clearTimeout(timer);
+  }, [clearMessage]);
 
   /** 删除要点两次：第一次只是把按钮变成「确认删除」 */
   const handleDelete = (clip: Clip) => {
@@ -113,11 +140,15 @@ export default function PanelApp() {
 
   const refresh = useCallback(async () => {
     try {
-      const [list, nextStats, settings, pins] = await Promise.all([
+      const [list, nextStats, settings, pinsResult] = await Promise.all([
         api.listClips(debounced, kind),
         api.clipStats(),
         api.getSettings(),
-        api.listPins().catch(() => []),
+        // 读不到贴图列表时保留「未知」，别在确认文案里谎报 0 个贴图
+        api
+          .listPins()
+          .then((pins) => ({ ok: true, pins }))
+          .catch(() => ({ ok: false, pins: [] as Pin[] })),
       ]);
       setClips(list);
       setStats(nextStats);
@@ -126,13 +157,62 @@ export default function PanelApp() {
       // ?? 100：后端比前端旧时（dev 热更、半新半旧的组合）字段可能是 undefined，
       // 直接算会得到 NaN 的 CSS 变量，把玻璃底色整个算废
       setPanelOpacity(settings.panelOpacity ?? 100);
-      setPinnedIds(pins.map((pin) => pin.clipId));
+      setPinnedIds(pinsResult.pins.map((pin) => pin.clipId));
+      setPinsLoaded(pinsResult.ok);
       setActive((index) => Math.min(index, Math.max(0, list.length - 1)));
       setError(null);
     } catch (err) {
       setError(String(err));
     }
   }, [debounced, kind]);
+
+  /** 第一次点橡皮擦只进入确认态，不碰数据 */
+  const requestClearAll = () => {
+    if (clearing) return;
+    setError(null);
+    setClearConfirm(true);
+  };
+
+  /** 取消清空：关掉确认条，把焦点还给橡皮擦（若它已禁用则回搜索框） */
+  const cancelClearAll = useCallback(() => {
+    setClearConfirm(false);
+    focusAfterPaint(() =>
+      eraserRef.current && !eraserRef.current.disabled
+        ? eraserRef.current
+        : searchRef.current,
+    );
+  }, []);
+
+  /** 确认清空：沿用原来的 clearAll 行为，成功后才关确认条并播报 */
+  const confirmClearAll = async () => {
+    if (clearing) return;
+    setClearing(true);
+    setError(null);
+    try {
+      const removed = await api.clearClips("all");
+      setClearConfirm(false);
+      await refresh();
+      setClearMessage(`已清空 ${removed} 条记录`);
+      focusAfterPaint(() => searchRef.current);
+    } catch (err) {
+      setError(`清空失败：${String(err)}`);
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  /** Tab 只在「取消 / 清空」之间循环，别把焦点漏回列表 */
+  const onClearConfirmKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Tab") return;
+    const buttons = [clearConfirmButtonRef.current, clearCancelRef.current].filter(
+      (button): button is HTMLButtonElement => button !== null,
+    );
+    const index = buttons.findIndex((button) => button === document.activeElement);
+    if (index === -1) return;
+    e.preventDefault();
+    const next = (index + (e.shiftKey ? -1 : 1) + buttons.length) % buttons.length;
+    buttons[next].focus();
+  };
 
   useEffect(() => {
     void dataDir().then(setDir);
@@ -180,6 +260,23 @@ export default function PanelApp() {
     };
   }, [refresh]);
 
+  // 清空确认出现时，把焦点放到安全操作「取消」上；再次点击确认前不默认危险操作
+  useEffect(() => {
+    if (!clearConfirm) return;
+    const frame = focusAfterPaint(() => clearCancelRef.current);
+    return () => window.cancelAnimationFrame(frame);
+  }, [clearConfirm]);
+
+  // 面板被收起时丢掉未确认的清空状态，下次打开重新开始，别带着旧计数
+  useEffect(() => {
+    const unlisten = api.onPanelVisible((visible) => {
+      if (!visible) setClearConfirm(false);
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
+
   // 拖动后回写位置（节流），下次唤起还记得停在哪
   useEffect(() => {
     const win = getCurrentWindow();
@@ -202,12 +299,18 @@ export default function PanelApp() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        // 层级：关于 → 设置 → 收起面板
+        // 层级：清空确认 → 关于 → 设置 → 收起面板
+        if (clearConfirm) {
+          e.preventDefault();
+          cancelClearAll();
+          return;
+        }
         if (aboutOpen) setAboutOpen(false);
         else if (settingsOpen) setSettingsOpen(false);
         else void api.hidePanel();
         return;
       }
+      if (clearConfirm) return; // 确认态里 Enter / 方向键交给聚焦按钮，别打开 viewer
       if (aboutOpen || settingsOpen) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -226,7 +329,7 @@ export default function PanelApp() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clips, active, settingsOpen, aboutOpen]);
+  }, [clips, active, settingsOpen, aboutOpen, clearConfirm, cancelClearAll]);
 
   // 换搜索词 / 筛选：结果换了一批，选中项回到第一条、列表回顶部。
   // 注意这跟下面的「选中项进视野」是两件事：refresh 造成的数组变化不能滚列表。
@@ -265,9 +368,8 @@ export default function PanelApp() {
     }
   };
 
-  /**
-   * 桌面置顶开关：后端一次改两处 —— 窗口 `always_on_top` 与落盘的 `panelPinned`。
-   * 关掉之后面板会在失焦时自动收起（Rust 侧 `WindowEvent::Focused`），
+  /** 桌面置顶开关：后端一次改两处 —— 窗口 `always_on_top` 与落盘的 `panelPinned`。
+   * 关掉之后面板会在失焦时自动收起（Rust 侧轮询前台窗口，见 `lib::watch_panel_blur`），
    * 所以开关的文案要如实说清「点外部会关」。
    */
   const togglePinned = async () => {
@@ -282,20 +384,37 @@ export default function PanelApp() {
     }
   };
 
-  const clearAll = async () => {
-    setClearing(true);
-    try {
-      await api.clearClips("all");
-      await refresh();
-    } catch (err) {
-      setError(`清空失败：${String(err)}`);
-    } finally {
-      setClearing(false);
-    }
+  /** 清空确认文案：计数拿不到就用「全部 / 未知」，别把未知冒充 0 */
+  const clipCount = stats?.total;
+  const pinCount = pinsLoaded ? pinnedIds.length : null;
+  const clearSummary = {
+    countText: clipCount == null ? "全部记录" : `${clipCount} 条记录`,
+    pinText:
+      pinCount == null
+        ? "，已贴到桌面的内容也会关闭"
+        : pinCount > 0
+          ? `，并关闭 ${pinCount} 个桌面贴图`
+          : "，当前没有桌面贴图",
+    confirmLabel: clipCount == null ? "清空全部" : `清空 ${clipCount} 条`,
+    eraserDisabled: clearing || stats === null || clipCount === 0,
+    eraserTitle: clearing
+      ? "正在清空全部历史…"
+      : stats === null
+        ? "正在读取历史…"
+        : clipCount === 0
+          ? "没有可清空的历史"
+          : "清空全部历史",
   };
 
   return (
     <div className="app-card">
+      {clearConfirm && (
+        <div
+          className="panel-clear-backdrop"
+          aria-hidden="true"
+          onClick={cancelClearAll}
+        />
+      )}
       <header
         className="app-header"
         data-tauri-drag-region="deep"
@@ -429,6 +548,51 @@ export default function PanelApp() {
               )}
             </div>
 
+            {clearConfirm && (
+              /* 视觉上是内联条，但遮罩挡点击 + Tab 陷阱让它按 modal 交互 */
+              <div
+                className="panel-clear-confirm"
+                role="alertdialog"
+                aria-modal="true"
+                aria-labelledby="panel-clear-title"
+                aria-describedby="panel-clear-desc"
+                onKeyDown={onClearConfirmKeyDown}
+              >
+                <div className="panel-clear-copy">
+                  <strong id="panel-clear-title" className="panel-clear-title">
+                    清空全部历史？
+                  </strong>
+                  <span id="panel-clear-desc" className="panel-clear-desc">
+                    将删除{clearSummary.countText}
+                    {clearSummary.pinText}；磁盘上的图片文件也会删除。此操作无法撤销。
+                  </span>
+                  <span className="panel-clear-hint">
+                    文件条目的源文件不会被删除。
+                  </span>
+                </div>
+                <div className="panel-clear-actions">
+                  <button
+                    ref={clearConfirmButtonRef}
+                    type="button"
+                    className="ghost-button ghost-button--danger"
+                    disabled={clearing}
+                    onClick={() => void confirmClearAll()}
+                  >
+                    {clearing ? "清空中…" : clearSummary.confirmLabel}
+                  </button>
+                  <button
+                    ref={clearCancelRef}
+                    type="button"
+                    className="ghost-button"
+                    disabled={clearing}
+                    onClick={cancelClearAll}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="panel-status">
               <div className="panel-status-group">
                 <span className="panel-status-dot" aria-hidden="true" />
@@ -455,12 +619,13 @@ export default function PanelApp() {
                   <IconMonitor size={14} />
                 </button>
                 <button
+                  ref={eraserRef}
                   type="button"
                   className="status-button status-button--danger"
-                  title="清空全部历史"
-                  aria-label="清空全部历史"
-                  disabled={clearing}
-                  onClick={() => void clearAll()}
+                  title={clearSummary.eraserTitle}
+                  aria-label={clearSummary.eraserTitle}
+                  disabled={clearSummary.eraserDisabled}
+                  onClick={requestClearAll}
                 >
                   <IconEraser size={14} />
                 </button>
@@ -471,6 +636,10 @@ export default function PanelApp() {
       </main>
 
       {error && <div className="panel-error">{error}</div>}
+
+      <div className="toast panel-clear-status" role="status" aria-live="polite">
+        {clearMessage ?? ""}
+      </div>
 
       <footer className="app-footer">
         <div className="app-footer-group">
@@ -494,7 +663,7 @@ export default function PanelApp() {
         </div>
         <div className="app-footer-group">
           <span className="kbd">Esc</span>
-          <span>{settingsOpen ? "返回" : "关闭"}</span>
+          <span>{clearConfirm ? "取消" : settingsOpen ? "返回" : "关闭"}</span>
         </div>
       </footer>
 

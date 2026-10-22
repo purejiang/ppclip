@@ -29,7 +29,7 @@
 
 PPClip is a small Windows utility that lives in a floating ball and a tray icon. There is no main window to keep around: click the ball or the tray icon to open your clipboard history. New items are deduplicated by content hash and stored in a local SQLite database. Screenshots are copied to the clipboard and added to the same history.
 
-Everything stays on your machine. PPClip makes no network requests.
+Everything stays on your machine and is never uploaded or synced. PPClip is offline by default; it contacts GitHub's releases API (api.github.com) only when you press “Check for updates” — no clipboard content is sent, and nothing is downloaded or installed.
 
 ## Features
 
@@ -107,7 +107,7 @@ cd src-tauri && cargo check   # Rust type check
 
 ## Data & privacy
 
-All data is stored locally. PPClip does not upload or sync anything and makes no network requests.
+All data is stored locally and is never uploaded or synced. PPClip makes no background network requests; the only outbound request is a GitHub Releases API call (api.github.com) when you press “Check for updates”. It sends no clipboard content and downloads or installs nothing.
 
 Default location: `%APPDATA%\com.purejiang.ppclip\`
 
@@ -133,11 +133,14 @@ The UI has no component library and no icon font: styles are hand-written CSS va
 - Only plain text, images, and file lists are stored; rich text / HTML is not preserved.
 - On multi-monitor setups, a selection is limited to the display under the cursor (mixed-DPI cross-screen selection is not supported).
 - Exclusive full-screen apps (some games and video players) may cover the floating ball and desktop pins.
+- Check for updates requires network access; a failed check does not affect any local feature.
 - The interface is currently Chinese-only.
 
 ## Contributing
 
 Issues and pull requests are welcome. Before opening a PR, please run `npm run lint`, `npm run build`, and `cd src-tauri && cargo test`.
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## License
 

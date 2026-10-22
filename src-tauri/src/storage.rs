@@ -943,6 +943,29 @@ mod tests {
     }
 
     #[test]
+    fn clear_removes_pins_and_image_files() {
+        let (storage, dir) = temp_storage();
+
+        let clip = storage.upsert_text("pinned", "clipboard").unwrap();
+        let pin_id = storage.create_pin(clip.id, 10, 20, 320, 240, 1.0).unwrap();
+        let image = storage
+            .upsert_image(&fake_png(500), b"t", 6, 4, "clipboard")
+            .unwrap();
+        let image_clip = storage.get(image.id).unwrap();
+        let image_rel = image_clip.image_rel.unwrap();
+        let thumb_rel = image_clip.thumb_rel.unwrap();
+
+        assert_eq!(storage.clear(None).unwrap(), 2);
+        assert_eq!(storage.count(), 0);
+        assert!(storage.list_pins().unwrap().is_empty());
+        assert!(storage.get_pin(pin_id).is_err());
+        assert!(!dir.join(&image_rel).exists());
+        assert!(!dir.join(&thumb_rel).exists());
+
+        cleanup(&dir);
+    }
+
+    #[test]
     fn stats_aggregate_counts_and_bytes() {
         let (storage, dir) = temp_storage();
 

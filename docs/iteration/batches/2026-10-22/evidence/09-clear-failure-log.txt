@@ -1,0 +1,16 @@
+PASS: app stays running
+PASS: panel found
+PASS: eraser found
+PASS: confirmation armed
+locker output: locked
+PASS: external write lock is held
+PASS: confirm button found
+PASS: failed clear keeps clips
+PASS: failed clear keeps pins
+PASS: confirmation stays open after failure
+PASS: error strip shows 清空失败
+error text: 清空失败：数据库错误: database is locked
+PASS: confirm button is available again
+PASS: confirm button re-enabled
+shot: 09-clear-failure.png
+FAILURE PATH VERIFIED

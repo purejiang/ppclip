@@ -1,0 +1,59 @@
+[19:59:17] app: F:\cyanrain\AI\vibecoding\ppclip\src-tauri\target\release\ppclip.exe
+[19:59:17] data: F:\cyanrain\AI\vibecoding\ppclip\docs\iteration\.runtime\acceptance-run
+[19:59:17] screen: {X=0,Y=0,Width=1920,Height=1080}
+[19:59:17] dpi-ish panel expected 420x600; extra=F:\cyanrain\AI\vibecoding\ppclip\docs\iteration\.runtime\acceptance-run
+[19:59:27] PASS: app stays running
+[19:59:35] PASS: main panel window found via UI Automation
+[19:59:35] panel rect: 750,216,420,600
+[19:59:35] PASS: seed has 4 clips
+[19:59:35] PASS: seed has 1 pin
+[19:59:35] PASS: pin window restored
+[19:59:35] shot: F:\cyanrain\AI\vibecoding\ppclip\docs\iteration\batches\2026-10-22\evidence\01-panel-list.png
+[19:59:36] PASS: eraser button found
+[19:59:37] PASS: arm does not delete clips
+[19:59:37] PASS: arm does not delete pins
+[19:59:37] PASS: cancel button appears
+[19:59:37] PASS: confirm button shows the count
+[19:59:38] shot: F:\cyanrain\AI\vibecoding\ppclip\docs\iteration\batches\2026-10-22\evidence\02-confirm-armed.png
+[19:59:38] focus on arm: 取消
+[19:59:38] focus after Tab: 清空 4 条
+[19:59:39] focus after Shift+Tab: 取消
+[19:59:39] PASS: Tab moves to the destructive button
+[19:59:39] PASS: Shift+Tab moves back to cancel
+[19:59:39] Tab trap verified
+[19:59:39] PASS: cancel closes the confirmation
+[19:59:39] PASS: cancel keeps clips
+[19:59:39] PASS: cancel keeps pins
+[19:59:39] focused after cancel: 清空全部历史
+[19:59:40] shot: F:\cyanrain\AI\vibecoding\ppclip\docs\iteration\batches\2026-10-22\evidence\03-cancelled.png
+[19:59:40] PASS: eraser still discoverable while armed
+[19:59:41] PASS: second click at eraser position does not delete
+[19:59:41] PASS: second click at eraser position does not delete pins
+[19:59:41] PASS: second click at eraser position cancels, not confirms
+[19:59:42] shot: F:\cyanrain\AI\vibecoding\ppclip\docs\iteration\batches\2026-10-22\evidence\03b-double-click-safe.png
+[19:59:42] double-click safe landing verified
+[19:59:43] PASS: Enter on focused cancel closes confirmation
+[19:59:43] PASS: Enter on cancel does not delete
+[19:59:43] keyboard Enter-on-cancel verified
+[19:59:44] PASS: Esc closes confirmation
+[19:59:44] PASS: Esc does not delete
+[19:59:44] panel after Esc: offscreen=False rect=750,216,420,600
+[19:59:44] PASS: panel still visible after Esc
+[19:59:44] keyboard Esc verified
+[19:59:45] PASS: close button found while armed
+[19:59:53] PASS: panel reopened
+[19:59:53] PASS: confirmation reset after hide/reopen
+[19:59:53] PASS: hide/reopen keeps clips
+[19:59:54] shot: F:\cyanrain\AI\vibecoding\ppclip\docs\iteration\batches\2026-10-22\evidence\04-reopened-unarmed.png
+[19:59:54] PASS: viewer row found
+[19:59:55] PASS: viewer window opened
+[19:59:55] viewer rect: 750,216,760,620
+[19:59:55] PASS: confirm button available
+[19:59:56] shot: F:\cyanrain\AI\vibecoding\ppclip\docs\iteration\batches\2026-10-22\evidence\05-after-clear-toast.png
+[19:59:57] PASS: confirm deletes all clips
+[19:59:57] PASS: confirm cascades pins
+[19:59:57] PASS: pin window closed after clear
+[19:59:57] PASS: viewer window closed after clear
+[20:00:00] shot: F:\cyanrain\AI\vibecoding\ppclip\docs\iteration\batches\2026-10-22\evidence\06-empty-after-clear.png
+[20:00:00] PASS: eraser disabled when history is empty
+[20:00:00] ALL ACCEPTANCE CHECKS PASSED
