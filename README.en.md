@@ -140,6 +140,8 @@ The UI has no component library and no icon font: styles are hand-written CSS va
 
 Issues and pull requests are welcome. Before opening a PR, please run `npm run lint`, `npm run build`, and `cd src-tauri && cargo test`.
 
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
 ## License
 
 MIT

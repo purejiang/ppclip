@@ -21,8 +21,8 @@ here.
 | Base branch | `dev` for daily work; `main` only receives merges |
 | Integration branch | `iteration/vX.Y.Z` created from `dev` (merge `main` in first if `dev` is behind the release) |
 | Task branches | one branch/worktree per task, merged into the integration branch |
-| Current version | `0.2.5` (as of 2026-10-22) |
-| Next version | `0.3.0` by default; `0.2.6` if the batch contains only fixes/docs |
+| Current version | `0.2.6` (as of 2026-10-22) |
+| Next version | `0.3.0` by default; `0.2.7` if the batch contains only fixes/docs |
 
 ## Issues and batches
 

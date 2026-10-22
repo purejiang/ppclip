@@ -35,7 +35,7 @@
 | OS | Windows, interactive desktop session |
 | Screen | 1920×1080, panel reported `420×600` (100% scaling) |
 | Build | Tauri 2 · React 19 · Vite · Rust release build |
-| App version | `0.2.5` |
+| App version | `0.2.5` tested; version-only bump to `0.2.6` for release |
 | Isolated data | `docs/iteration/.runtime/acceptance-run/` (gitignored) |
 | Seed | 4 text clips + 1 pin, inserted with `sqlite3` after schema creation |
 | UI driver | `System.Windows.Automation` (UIAutomationClient) + `SendKeys` + physical click |

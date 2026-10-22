@@ -143,6 +143,8 @@ Tauri 2 · React 19 · TypeScript · Vite · Rust · rusqlite / SQLite
 
 版本迭代与 issue 工作流见 [docs/iteration/PPCLIP-ITERATION.md](docs/iteration/PPCLIP-ITERATION.md)；通用阶段复用 `.agents/skills`，PPClip 只保留 adapter 与三处增量。
 
+更新日志见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## License
 
 MIT
