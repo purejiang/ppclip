@@ -1,9 +1,10 @@
 # Tasks — 2026-10-22 (local dry-run)
 
 - **Status**: implemented on `iteration/v0.3.0` (product commit `fb25df6`).
-  Acceptance: `acceptance.md`; review: `review.md`. T1–T5 are complete; three
-  R-01 checks (failure injection, manual screen reader, 150% DPI) remain partial
-  and are listed in `acceptance.md`.
+  Acceptance: `acceptance.md`; review: `review.md`. T1–T5 are complete; T5 was
+  signed off by the maintainer on 2026-10-22 with residuals. Three R-01 checks
+  (failure injection, manual screen reader, 150% DPI) remain partial and are
+  listed in `acceptance.md`; release decision pending.
 - **Batch**: `2026-10-22`.
 - **Requirements**: `requirements.md` (R-01, R-02, R-03).
 - **Integration branch** (when implementation starts): `iteration/v0.3.0` from
@@ -17,7 +18,7 @@
 | T2 | done; failure path partial | `137e043`, `fb25df6`; UIA focus/Tab/Esc/Enter/reset/success checks; failure injection deferred |
 | T3 | done | `171701e`; `cargo test` 68/68 |
 | T4 | done | `c1b319d`; READMEs + `08-about-copy.png` |
-| T5 | done with residuals | `acceptance.md`, `evidence/`; three partial checks called out |
+| T5 | done; signed off with residuals | `acceptance.md`, `evidence/`; three partial checks called out; release decision pending |
 
 The checkboxes in the task sections below are the original acceptance
 criteria; see `acceptance.md` for the verified/partial disposition. Marking a
@@ -133,7 +134,8 @@ an isolated `PPCLIP_DATA_DIR` and the real release app.
       closed; images/thumbs deleted; empty state; keyboard/focus; hidden reset;
       error path; About hint.
 - [ ] Screenshots + commands/exit codes attached.
-- [ ] Maintainer signs the acceptance record.
+- [x] Maintainer signs the acceptance record. (2026-10-22, accept with
+      residuals; release decision deferred.)
 
 **Verification:** real release exe; isolated data dir; UIA/manual; screenshots.
 

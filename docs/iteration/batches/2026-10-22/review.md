@@ -1,6 +1,7 @@
 # Review — 2026-10-22 (local dry-run)
 
 - **Status**: review complete; all blocking findings fixed and re-tested.
+  Maintainer signed off on 2026-10-22 with residuals; release decision pending.
 - **Batch**: `2026-10-22`.
 - **Requirements**: `requirements.md`.
 - **Branch**: `iteration/v0.3.0`.
@@ -115,5 +116,6 @@ The per-criterion matrix, commands, environment, and verdicts are in
 ## Verdict
 
 No blocking review findings remain. The remaining items are explicitly listed as
-residual risks in `acceptance.md`; the batch is ready for maintainer sign-off.
-No release, tag, push, PR, or GitHub issue write was performed.
+residual risks in `acceptance.md`; the maintainer signed off on 2026-10-22 with
+those residuals. Release remains a separate decision. No release, tag, push, PR,
+or GitHub issue write was performed.

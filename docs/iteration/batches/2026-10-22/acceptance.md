@@ -1,14 +1,16 @@
 # Acceptance — 2026-10-22 (local dry-run)
 
-- **Status**: real-app acceptance complete; maintainer sign-off pending.
+- **Status**: real-app acceptance complete; signed off by the maintainer on
+  2026-10-22 **with residuals**. Release decision pending.
 - **Batch**: `2026-10-22`.
 - **Requirements**: `requirements.md` (R-01, R-02, R-03).
 - **Implemented on**: `iteration/v0.3.0`, product commit `fb25df6`.
 - **Verdict**: R-01 **verified** for the destructive/confirmation path,
   **partial** for failure injection and manual screen-reader/150% DPI checks;
   R-02 **verified**; R-03 **verified**.
-- **Release**: not released, tagged, pushed, or opened as a PR. No GitHub issue
-  was created, commented, labelled, or closed.
+- **Release**: not released, tagged, pushed, or opened as a PR. Sign-off does
+  not authorize those actions. No GitHub issue was created, commented,
+  labelled, or closed.
 
 ## 中文摘要
 
@@ -18,8 +20,8 @@
 1 个贴图都被删、贴图窗口关闭、状态提示出现、空列表下橡皮擦禁用；隐藏面板
 再打开会重置确认态；50% 面板不透明度下确认条仍可读；关于页两处新文案
 都能被 UIA 读到。失败路径（数据库写失败）没有做故障注入，读屏软件和
-150% DPI 没做人工验收，这三项列为 residual risk；因此本轮不发布，等维护者
-签字或补测后再决定。
+150% DPI 没做人工验收，这三项列为 residual risk。维护者已于 2026-10-22
+签收（接受 residual）；本轮不发布，发布决定另行确认。
 
 ## Environment
 
@@ -161,7 +163,10 @@ dump was removed). The automation script itself lives in the gitignored
 
 ## Sign-off
 
-- Maintainer: ____________________
-- Date: ____________________
-- Decision: accept as-is for release / accept with residuals / require follow-up
-  (circle one)
+- Maintainer: purejiang
+- Date: 2026-10-22
+- Decision: **accept with residuals**. Failure injection, manual screen-reader
+  pass, and 150% DPI remain open and are listed above; release is explicitly
+  deferred to a separate decision.
+- Scope: implementation and this acceptance record. Sign-off does **not**
+  authorize push, tag, release, or any GitHub write.
