@@ -890,7 +890,9 @@ html[data-window="main"] .app-footer {
 }
 
 .panel-clear-status:empty {
-  display: none;
+  /* Keep the live region in the accessibility tree while empty; display:none
+     would create it at the same moment as the text and defeat the announcement. */
+  opacity: 0;
 }
 
 @keyframes clear-confirm-in {
