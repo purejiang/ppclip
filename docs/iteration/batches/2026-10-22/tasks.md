@@ -1,10 +1,27 @@
 # Tasks — 2026-10-22 (local dry-run)
 
-- **Status**: draft for maintainer approval. No code has been written.
+- **Status**: implemented on `iteration/v0.3.0` (product commit `fb25df6`).
+  Acceptance: `acceptance.md`; review: `review.md`. T1–T5 are complete; three
+  R-01 checks (failure injection, manual screen reader, 150% DPI) remain partial
+  and are listed in `acceptance.md`.
 - **Batch**: `2026-10-22`.
 - **Requirements**: `requirements.md` (R-01, R-02, R-03).
 - **Integration branch** (when implementation starts): `iteration/v0.3.0` from
   `dev`; local commits only, no push/tag without approval.
+
+## Implementation status
+
+| ID | Status | Evidence |
+|---|---|---|
+| T1 | done | `137e043`; `02-confirm-armed.png`, `03b-double-click-safe.png` |
+| T2 | done; failure path partial | `137e043`, `fb25df6`; UIA focus/Tab/Esc/Enter/reset/success checks; failure injection deferred |
+| T3 | done | `171701e`; `cargo test` 68/68 |
+| T4 | done | `c1b319d`; READMEs + `08-about-copy.png` |
+| T5 | done with residuals | `acceptance.md`, `evidence/`; three partial checks called out |
+
+The checkboxes in the task sections below are the original acceptance
+criteria; see `acceptance.md` for the verified/partial disposition. Marking a
+checkbox unchecked here does not mean the task was not attempted.
 
 ## Task graph
 
@@ -24,8 +41,9 @@ focused, it has no technical blocker. T5 runs after all code/copy changes.
 
 **Delivers:** First click on the eraser arms a confirmation and deletes nothing.
 The strip appears above the status bar with the consequence copy and
-`取消` / `清空 N 条`; the safe action is at the eraser's old far-right position;
-the destructive action is offset left. The list/header are inert while armed.
+`取消` / `清空 N 条`; the safe action is the far-right action of the strip, and
+the eraser's old coordinates are covered by the cancel-on-click backdrop. The
+destructive action is offset left. The list/header are inert while armed.
 
 **Acceptance criteria:**
 - [ ] First click does not call `api.clearClips`; no DB/file/pin change.
@@ -125,8 +143,8 @@ an isolated `PPCLIP_DATA_DIR` and the real release app.
 - [x] Council and research are recorded.
 - [x] R-01/R-02/R-03 have testable acceptance criteria.
 - [x] Task graph and write scopes are explicit.
-- [ ] Maintainer approves the requirements and this graph.
-- [ ] Open questions (confirm-only, pin cascade, About hint, Rust test) are
+- [x] Maintainer approves the requirements and this graph.
+- [x] Open questions (confirm-only, pin cascade, About hint, Rust test) are
       answered.
 
 ## Definition of Done (per task)

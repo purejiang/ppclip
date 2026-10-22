@@ -1,7 +1,14 @@
 # Requirements — 2026-10-22 (local dry-run)
 
-- **Status**: draft for maintainer approval. No code has been written.
+- **Status**: approved and implemented on `iteration/v0.3.0` (product commit
+  `fb25df6`). Acceptance and residual risks: `acceptance.md`; review:
+  `review.md`.
 - **Mode**: local dry-run; candidates are local IDs, not GitHub issues.
+- **Implementation note**: the approved "cancel at eraser's old position" is
+  implemented as "cancel is the far-right action of the inline confirmation
+  strip; the eraser's old coordinates are covered by the cancel-on-click
+  backdrop". The double-click safety outcome is verified in `acceptance.md`
+  check 7; the literal layout differs.
 - **Inputs**: `intake.md`, `triage.md`, `council.md`, `research.md`.
 - **Council recommendation**: pilot C-01, evidence C-04; C-02 to be sequenced
   after C-01; C-03/L-03 deferred.
