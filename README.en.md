@@ -29,7 +29,7 @@
 
 PPClip is a small Windows utility that lives in a floating ball and a tray icon. There is no main window to keep around: click the ball or the tray icon to open your clipboard history. New items are deduplicated by content hash and stored in a local SQLite database. Screenshots are copied to the clipboard and added to the same history.
 
-Everything stays on your machine and is never uploaded or synced. PPClip is offline by default; it contacts GitHub's releases API (api.github.com) only when you press “Check for updates” — no clipboard content is sent, and nothing is downloaded or installed automatically.
+Everything stays on your machine and is never uploaded or synced. PPClip is offline by default; it contacts GitHub's releases API (api.github.com) only when you press “Check for updates” — no clipboard content is sent, and nothing is downloaded or installed.
 
 ## Features
 

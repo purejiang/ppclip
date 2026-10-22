@@ -33,6 +33,11 @@ For every phase, one of these is true:
 If a phase needs a rule that already exists in `.agents/skills/`, link to it
 instead of restating it.
 
+> **Local skill installation.** Paths under `.agents/skills/` refer to the local
+> agent skill pack installed in this workspace; they are not tracked by this
+> repository. If a clone lacks them, use the named skills from your agent's
+> catalog and the templates in this batch.
+
 ## Preconditions
 
 1. Read `AGENTS.md`, `GLOSSARY.md`, `docs/agents/domain.md`,

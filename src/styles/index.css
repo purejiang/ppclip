@@ -838,8 +838,8 @@ html[data-window="main"] .app-footer {
   flex-direction: column;
   gap: 6px;
   padding: 8px 12px;
-  border-top: 1px solid rgb(var(--error-rgb) / 30%);
-  background: rgb(var(--surface-container-high) / 96%);
+  border-top: 1px solid rgb(var(--error-rgb) / calc(30% * var(--panel-opacity)));
+  background: rgb(var(--surface-container-high) / calc(96% * var(--panel-opacity)));
   backdrop-filter: blur(12px);
   animation: clear-confirm-in 160ms ease;
 }
@@ -878,8 +878,8 @@ html[data-window="main"] .app-footer {
   white-space: nowrap;
 }
 
-.panel-clear-actions .ghost-button:focus-visible,
-.status-button:focus-visible {
+.panel-clear-actions .ghost-button:focus,
+.status-button:focus {
   outline: 2px solid rgb(var(--primary-rgb) / 80%);
   outline-offset: 2px;
 }
@@ -887,6 +887,10 @@ html[data-window="main"] .app-footer {
 .panel-clear-status {
   top: 56px;
   z-index: 60;
+}
+
+.panel-clear-status:empty {
+  display: none;
 }
 
 @keyframes clear-confirm-in {

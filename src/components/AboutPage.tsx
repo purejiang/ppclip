@@ -152,7 +152,7 @@ export default function AboutPage({ version, onClose }: Props) {
               )}
               {check.kind === "idle" && (
                 <span className="about-status">
-                  会请求 GitHub 检查版本；不上传剪贴板内容
+                  会请求 GitHub 检查版本；不上传剪贴板内容，不自动下载
                 </span>
               )}
             </div>

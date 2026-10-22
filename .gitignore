@@ -32,6 +32,10 @@ src-tauri/gen/schemas/
 # AI assistant
 .omo/
 .codegraph/
+# 本机 agent skill 安装（不随仓库提交；见 AGENTS.md）
+.agents/
+.claude/
+skills-lock.json
 
 # 版本迭代运行时产物（raw issue JSON / 临时数据 / 日志）
 docs/iteration/.runtime/

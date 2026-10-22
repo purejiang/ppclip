@@ -15,7 +15,8 @@ Windows 剪贴板历史 + 截图 + 桌面贴图小工具。入口有两个：置
 
 以 GitHub issue 为输入跑一轮迭代时，先读 `docs/iteration/PPCLIP-ITERATION.md`。通用阶段复用
 `.agents/skills` 里的 `triage` / `to-spec` / `to-tickets` / `implement-spec` / `code-review` /
-`research` / `tdd` / `retro`，不另写一套；PPClip 具体配置在 `docs/iteration/PPCLIP-ADAPTER.md`，
+`research` / `tdd` / `retro`，不另写一套（`.agents/skills` 是本机 skill 安装，不随仓库提交；没有它时按
+skill 名称使用）；PPClip 具体配置在 `docs/iteration/PPCLIP-ADAPTER.md`，
 增量在 `INTAKE.md` / `COUNCIL.md` / `ACCEPTANCE.md`。当前 0 issue（2026-10-22），首轮走 bootstrap（见 `INTAKE.md`）。
 
 ## 关键命令

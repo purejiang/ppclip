@@ -28,6 +28,10 @@ so re-check before making a major process change.
 
 ## Local prior art
 
+> The `.agents/skills/` paths below are a **local skill installation**, not
+> tracked files in this repository. If the pack is absent, use the skill names
+> from your agent's catalog and the templates in this batch.
+
 The repository already contains the generic workflow skills. They are the
 primary implementation; this documentation is an adapter around them:
 

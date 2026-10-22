@@ -39,6 +39,11 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
+/** 等浏览器画完一帧再聚焦，避免 ref 还没挂载 */
+function focusAfterPaint(target: () => HTMLElement | null): number {
+  return window.requestAnimationFrame(() => target()?.focus());
+}
+
 /**
  * 历史面板（照 stitch 稿）：
  *
@@ -171,13 +176,11 @@ export default function PanelApp() {
   /** 取消清空：关掉确认条，把焦点还给橡皮擦（若它已禁用则回搜索框） */
   const cancelClearAll = useCallback(() => {
     setClearConfirm(false);
-    window.requestAnimationFrame(() => {
-      if (eraserRef.current && !eraserRef.current.disabled) {
-        eraserRef.current.focus();
-      } else {
-        searchRef.current?.focus();
-      }
-    });
+    focusAfterPaint(() =>
+      eraserRef.current && !eraserRef.current.disabled
+        ? eraserRef.current
+        : searchRef.current,
+    );
   }, []);
 
   /** 确认清空：沿用原来的 clearAll 行为，成功后才关确认条并播报 */
@@ -190,7 +193,7 @@ export default function PanelApp() {
       setClearConfirm(false);
       await refresh();
       setClearMessage(`已清空 ${removed} 条记录`);
-      window.requestAnimationFrame(() => searchRef.current?.focus());
+      focusAfterPaint(() => searchRef.current);
     } catch (err) {
       setError(`清空失败：${String(err)}`);
     } finally {
@@ -201,16 +204,14 @@ export default function PanelApp() {
   /** Tab 只在「取消 / 清空」之间循环，别把焦点漏回列表 */
   const onClearConfirmKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== "Tab") return;
-    const first = clearCancelRef.current;
-    const last = clearConfirmButtonRef.current;
-    if (!first || !last) return;
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
+    const buttons = [clearConfirmButtonRef.current, clearCancelRef.current].filter(
+      (button): button is HTMLButtonElement => button !== null,
+    );
+    const index = buttons.findIndex((button) => button === document.activeElement);
+    if (index === -1) return;
+    e.preventDefault();
+    const next = (index + (e.shiftKey ? -1 : 1) + buttons.length) % buttons.length;
+    buttons[next].focus();
   };
 
   useEffect(() => {
@@ -262,7 +263,7 @@ export default function PanelApp() {
   // 清空确认出现时，把焦点放到安全操作「取消」上；再次点击确认前不默认危险操作
   useEffect(() => {
     if (!clearConfirm) return;
-    const frame = window.requestAnimationFrame(() => clearCancelRef.current?.focus());
+    const frame = focusAfterPaint(() => clearCancelRef.current);
     return () => window.cancelAnimationFrame(frame);
   }, [clearConfirm]);
 
@@ -368,7 +369,7 @@ export default function PanelApp() {
   };
 
   /** 桌面置顶开关：后端一次改两处 —— 窗口 `always_on_top` 与落盘的 `panelPinned`。
-   * 关掉之后面板会在失焦时自动收起（Rust 侧 `WindowEvent::Focused`），
+   * 关掉之后面板会在失焦时自动收起（Rust 侧轮询前台窗口，见 `lib::watch_panel_blur`），
    * 所以开关的文案要如实说清「点外部会关」。
    */
   const togglePinned = async () => {
@@ -386,25 +387,24 @@ export default function PanelApp() {
   /** 清空确认文案：计数拿不到就用「全部 / 未知」，别把未知冒充 0 */
   const clipCount = stats?.total;
   const pinCount = pinsLoaded ? pinnedIds.length : null;
-  const clearCountText =
-    clipCount == null ? "全部记录" : `${clipCount} 条记录`;
-  const clearPinText =
-    pinCount == null
-      ? "，已贴到桌面的内容也会关闭"
-      : pinCount > 0
-        ? `，并关闭 ${pinCount} 个桌面贴图`
-        : "，当前没有桌面贴图";
-  const clearConfirmLabel =
-    clipCount == null ? "清空全部" : `清空 ${clipCount} 条`;
-  const eraserDisabled =
-    clearing || stats === null || (stats?.total ?? 0) === 0;
-  const eraserTitle = clearing
-    ? "正在清空全部历史…"
-    : stats === null
-      ? "正在读取历史…"
-      : (stats.total === 0)
-        ? "没有可清空的历史"
-        : "清空全部历史";
+  const clearSummary = {
+    countText: clipCount == null ? "全部记录" : `${clipCount} 条记录`,
+    pinText:
+      pinCount == null
+        ? "，已贴到桌面的内容也会关闭"
+        : pinCount > 0
+          ? `，并关闭 ${pinCount} 个桌面贴图`
+          : "，当前没有桌面贴图",
+    confirmLabel: clipCount == null ? "清空全部" : `清空 ${clipCount} 条`,
+    eraserDisabled: clearing || stats === null || clipCount === 0,
+    eraserTitle: clearing
+      ? "正在清空全部历史…"
+      : stats === null
+        ? "正在读取历史…"
+        : clipCount === 0
+          ? "没有可清空的历史"
+          : "清空全部历史",
+  };
 
   return (
     <div className="app-card">
@@ -549,6 +549,7 @@ export default function PanelApp() {
             </div>
 
             {clearConfirm && (
+              /* 视觉上是内联条，但遮罩挡点击 + Tab 陷阱让它按 modal 交互 */
               <div
                 className="panel-clear-confirm"
                 role="alertdialog"
@@ -562,8 +563,8 @@ export default function PanelApp() {
                     清空全部历史？
                   </strong>
                   <span id="panel-clear-desc" className="panel-clear-desc">
-                    将删除{clearCountText}
-                    {clearPinText}；磁盘上的图片文件也会删除。此操作无法撤销。
+                    将删除{clearSummary.countText}
+                    {clearSummary.pinText}；磁盘上的图片文件也会删除。此操作无法撤销。
                   </span>
                   <span className="panel-clear-hint">
                     文件条目的源文件不会被删除。
@@ -577,7 +578,7 @@ export default function PanelApp() {
                     disabled={clearing}
                     onClick={() => void confirmClearAll()}
                   >
-                    {clearing ? "清空中…" : clearConfirmLabel}
+                    {clearing ? "清空中…" : clearSummary.confirmLabel}
                   </button>
                   <button
                     ref={clearCancelRef}
@@ -621,9 +622,9 @@ export default function PanelApp() {
                   ref={eraserRef}
                   type="button"
                   className="status-button status-button--danger"
-                  title={eraserTitle}
-                  aria-label={eraserTitle}
-                  disabled={eraserDisabled}
+                  title={clearSummary.eraserTitle}
+                  aria-label={clearSummary.eraserTitle}
+                  disabled={clearSummary.eraserDisabled}
                   onClick={requestClearAll}
                 >
                   <IconEraser size={14} />
@@ -636,11 +637,9 @@ export default function PanelApp() {
 
       {error && <div className="panel-error">{error}</div>}
 
-      {clearMessage && (
-        <div className="toast panel-clear-status" role="status">
-          {clearMessage}
-        </div>
-      )}
+      <div className="toast panel-clear-status" role="status" aria-live="polite">
+        {clearMessage ?? ""}
+      </div>
 
       <footer className="app-footer">
         <div className="app-footer-group">
