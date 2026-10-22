@@ -1,11 +1,12 @@
 # Review — 2026-10-22 (local dry-run)
 
 - **Status**: review complete; all blocking findings fixed and re-tested.
-  Maintainer signed off on 2026-10-22 with residuals; release decision pending.
+  Maintainer signed off on 2026-10-22 for release with non-blocking notes;
+  screen-reader verification was explicitly excluded. Release go-ahead pending.
 - **Batch**: `2026-10-22`.
 - **Requirements**: `requirements.md`.
 - **Branch**: `iteration/v0.3.0`.
-- **Product diff**: `9a438f3...fb25df6` (the workflow-docs commit `9a438f3` is
+- **Product diff**: `9a438f3...3ce7531` (the workflow-docs commit `9a438f3` is
   the approved iteration-workflow base, not part of R-01–R-03).
 - **Acceptance**: `acceptance.md` and `evidence/`.
 
@@ -18,8 +19,9 @@
 层面的重复 switch / 重复 rAF 聚焦已合并，组件拆分和数据合并作为非阻塞项
 保留。真实 UIA 验收又抓到一个 Tab 陷阱条件写反的 bug（Tab 从取消跳到了
 状态条），已修并重跑通过。UI 按截图复核：确认条内联、取消在右、危险按钮
-在左、焦点环可见、50% 不透明度可读。当前无阻塞项；失败注入、读屏人工、
-150% DPI 仍是 residual risk。
+在左、焦点环可见、50% 不透明度可读。失败路径已补测（外部 DB 写锁），
+150% DPI 用 1.5× 渲染模拟通过；读屏按维护者决定降级、不纳入发布门槛。
+当前无阻塞项。
 
 ## Fixed point and scope
 
@@ -98,6 +100,8 @@ Screenshots reviewed at 420×600:
 | `06-empty-after-clear.png` | Eraser disabled after clear; empty-state copy unchanged. |
 | `07-confirm-opacity-50.png` | At 50% panel opacity the confirmation surface and text remain legible; the strip still reads as a foreground layer. |
 | `08-about-copy.png` | About idle hint and description show the scoped GitHub statement; no absolute offline claim. |
+| `09-clear-failure.png` | External DB lock: strip remains open, error line `清空失败：数据库错误: database is locked` visible, both buttons re-enabled, list still 4 items. |
+| `11-confirm-150dpi-simulated.png` | 1.5× render at 630×900: same logical layout, confirmation strip legible, safe cancel still rightmost. |
 
 Minor UI residual: the success toast overlaps the filter row for 2.4s. It is
 legible and transient; noted for polish, not blocking.
@@ -109,13 +113,21 @@ The per-criterion matrix, commands, environment, and verdicts are in
 
 | Requirement | Verdict |
 |---|---|
-| R-01 clear-all confirmation | **Verified** for arm/cancel/confirm/keyboard/focus/double-click/reset/success; **partial** for failure injection, screen-reader manual, and 150% DPI |
+| R-01 clear-all confirmation | **Verified** for arm/cancel/confirm/keyboard/focus/double-click/reset/success, **verified** for failure injection and simulated 150% render; screen-reader check explicitly excluded by maintainer |
 | R-02 scoped network claim | **Verified** |
 | R-03 Rust regression + runbook | **Verified** |
 
+## Residual closure
+
+| Former residual | Closure |
+|---|---|
+| Failure path | **Closed**: external `BEGIN EXCLUSIVE` lock produced `清空失败：数据库错误: database is locked`; strip stayed open, buttons re-enabled, DB still 4/1 (`09-clear-failure.png`, `09-clear-failure-log.txt`) |
+| 150% DPI | **Closed by simulation**: WebView2 device scale 1.5 + 630×900 physical window; layout and copy correct (`11-confirm-150dpi-simulated.png`). Real OS display-scaling switch still not performed, recorded as a low-risk note |
+| Screen reader | **Downgraded by maintainer**: not a release gate; `role="status"` markup retained, no human AT narration |
+
 ## Verdict
 
-No blocking review findings remain. The remaining items are explicitly listed as
-residual risks in `acceptance.md`; the maintainer signed off on 2026-10-22 with
-those residuals. Release remains a separate decision. No release, tag, push, PR,
-or GitHub issue write was performed.
+No blocking review findings remain. The remaining items are non-blocking notes in
+`acceptance.md`; the maintainer signed off for release on 2026-10-22, with
+screen-reader verification explicitly excluded. Release still requires an
+explicit go-ahead. No release, tag, push, PR, or GitHub issue write was performed.

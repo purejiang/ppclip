@@ -1,10 +1,11 @@
 # Tasks — 2026-10-22 (local dry-run)
 
-- **Status**: implemented on `iteration/v0.3.0` (product commit `fb25df6`).
-  Acceptance: `acceptance.md`; review: `review.md`. T1–T5 are complete; T5 was
-  signed off by the maintainer on 2026-10-22 with residuals. Three R-01 checks
-  (failure injection, manual screen reader, 150% DPI) remain partial and are
-  listed in `acceptance.md`; release decision pending.
+- **Status**: implemented on `iteration/v0.3.0` (product commits `fb25df6` and
+  `3ce7531`). Acceptance: `acceptance.md`; review:
+  `review.md`. T1–T5 are complete; T5 was signed off by the maintainer on
+  2026-10-22 for release with non-blocking notes. Failure injection is verified;
+  150% DPI is verified by simulation; screen-reader verification is explicitly
+  excluded. Release go-ahead pending.
 - **Batch**: `2026-10-22`.
 - **Requirements**: `requirements.md` (R-01, R-02, R-03).
 - **Integration branch** (when implementation starts): `iteration/v0.3.0` from
@@ -15,10 +16,10 @@
 | ID | Status | Evidence |
 |---|---|---|
 | T1 | done | `137e043`; `02-confirm-armed.png`, `03b-double-click-safe.png` |
-| T2 | done; failure path partial | `137e043`, `fb25df6`; UIA focus/Tab/Esc/Enter/reset/success checks; failure injection deferred |
+| T2 | done | `137e043`, `fb25df6`; UIA focus/Tab/Esc/Enter/reset/success checks; failure path verified with an external DB lock |
 | T3 | done | `171701e`; `cargo test` 68/68 |
 | T4 | done | `c1b319d`; READMEs + `08-about-copy.png` |
-| T5 | done; signed off with residuals | `acceptance.md`, `evidence/`; three partial checks called out; release decision pending |
+| T5 | done; signed off for release | `acceptance.md`, `evidence/`; failure path and simulated 150% render closed; screen reader excluded by maintainer; release go-ahead pending |
 
 The checkboxes in the task sections below are the original acceptance
 criteria; see `acceptance.md` for the verified/partial disposition. Marking a
@@ -78,8 +79,8 @@ hiding the panel resets the armed state.
 - [ ] Success: strip closes, list refreshes, `role="status"` announces
       `已清空 N 条` (N = `clearClips` return), focus moves to search (eraser is
       disabled).
-- [ ] Failure: strip remains open, error is visible, buttons re-enable, no data
-      changed.
+- [x] Failure: strip remains open, error is visible, buttons re-enable, no data
+      changed. (Verified with an external `BEGIN EXCLUSIVE` lock.)
 - [ ] Hiding the panel while armed resets the confirmation; reopening starts
       unarmed with no stale count.
 - [ ] New transition respects `prefers-reduced-motion`.
@@ -130,12 +131,12 @@ an isolated `PPCLIP_DATA_DIR` and the real release app.
 - [ ] `acceptance.md` contains the environment, steps, expected/actual, evidence,
       and `verified` / `partial` / `failed` verdicts.
 - [ ] No real clipboard/history is used; the default data directory is untouched.
-- [ ] Covers: first click no-op; cancel/Esc; confirm; pin windows closed; viewer
+- [x] Covers: first click no-op; cancel/Esc; confirm; pin windows closed; viewer
       closed; images/thumbs deleted; empty state; keyboard/focus; hidden reset;
-      error path; About hint.
-- [ ] Screenshots + commands/exit codes attached.
-- [x] Maintainer signs the acceptance record. (2026-10-22, accept with
-      residuals; release decision deferred.)
+      error path; About hint. (Error path verified; see `acceptance.md`.)
+- [x] Screenshots + commands/exit codes attached.
+- [x] Maintainer signs the acceptance record. (2026-10-22, accept for release;
+      screen-reader verification excluded; release go-ahead pending.)
 
 **Verification:** real release exe; isolated data dir; UIA/manual; screenshots.
 

@@ -1,13 +1,16 @@
 # Acceptance — 2026-10-22 (local dry-run)
 
 - **Status**: real-app acceptance complete; signed off by the maintainer on
-  2026-10-22 **with residuals**. Release decision pending.
+  2026-10-22 with non-blocking notes. Screen-reader verification was explicitly
+  downgraded by the maintainer; release is pending an explicit go-ahead.
 - **Batch**: `2026-10-22`.
 - **Requirements**: `requirements.md` (R-01, R-02, R-03).
-- **Implemented on**: `iteration/v0.3.0`, product commit `fb25df6`.
-- **Verdict**: R-01 **verified** for the destructive/confirmation path,
-  **partial** for failure injection and manual screen-reader/150% DPI checks;
-  R-02 **verified**; R-03 **verified**.
+- **Implemented on**: `iteration/v0.3.0`, product commits `fb25df6` and
+  `3ce7531` (the latter keeps the empty live region in the accessibility tree).
+- **Verdict**: R-01 **verified**, including the real failure path and a simulated
+  1.5× render; R-02 **verified**; R-03 **verified**. Screen-reader verification is
+  not part of this release gate (maintainer decision); the `role="status"`
+  markup is retained.
 - **Release**: not released, tagged, pushed, or opened as a PR. Sign-off does
   not authorize those actions. No GitHub issue was created, commented,
   labelled, or closed.
@@ -20,8 +23,10 @@
 1 个贴图都被删、贴图窗口关闭、状态提示出现、空列表下橡皮擦禁用；隐藏面板
 再打开会重置确认态；50% 面板不透明度下确认条仍可读；关于页两处新文案
 都能被 UIA 读到。失败路径（数据库写失败）没有做故障注入，读屏软件和
-150% DPI 没做人工验收，这三项列为 residual risk。维护者已于 2026-10-22
-签收（接受 residual）；本轮不发布，发布决定另行确认。
+150% DPI 用 1.5× 渲染模拟验证；读屏播报按维护者决定降级，不做人工验收。
+失败路径已补测：外部锁住数据库时清空失败，确认条保持打开、错误显示、按钮
+恢复可点、数据仍是 4 条 / 1 个贴图。维护者已签收；本轮不发布，发布决定
+另行确认。
 
 ## Environment
 
@@ -89,6 +94,8 @@ not hide it; the confirmation behaviour is independent of pinning.
 | 14 | Confirmation legible at 50% panel opacity | PASS | `07-confirm-opacity-50.png` |
 | 15 | About idle hint and description contain the scoped network statement | PASS | `08-about-copy.png`; UIA found both strings |
 | 16 | Full UIA assertion sequence | PASS | `acceptance-log.txt` |
+| 17 | Clear failure (external DB write lock): strip stays, error shown, buttons re-enabled, DB unchanged | PASS | `09-clear-failure.png`, `09-clear-failure-log.txt` |
+| 18 | Simulated 150% render (WebView2 scale 1.5 + 630×900 physical) | PASS | `11-confirm-150dpi-simulated.png` |
 
 ### Log summary
 
@@ -99,7 +106,13 @@ assertions:
 - after cancel/Enter/Esc/double-click: clips 4, pins 1;
 - after confirm: clips 0, pins 0;
 - pin window present after startup, absent after confirm;
-- viewer opened on a row (`750,216,760,620`) and was absent after confirm.
+- viewer opened on a row (`750,216,760,620`) and was absent after confirm;
+- failure injection: an external `BEGIN EXCLUSIVE` lock made the clear return
+  `清空失败：数据库错误: database is locked`; clips stayed 4, pins stayed 1, the
+  strip stayed open, and the confirm button was enabled again;
+- simulated 1.5× render: the panel was resized to `630×900` physical with
+  WebView2 device scale 1.5; the 420×600 logical layout and confirmation strip
+  rendered correctly.
 
 The full UIA assertion log is `evidence/acceptance-log.txt` (the per-button debug
 dump was removed). The automation script itself lives in the gitignored
@@ -120,12 +133,12 @@ dump was removed). The automation script itself lives in the gitignored
 | Rest of panel inert | verified | backdrop + focus trap; physical click at old eraser position cancels |
 | Eraser disabled when stats unknown/0 | verified for 0; code inspection for unknown | check 13; initial loading label/disabled path reviewed |
 | Success refresh/status/focus | verified | checks 11, 12; UIA found `已清空 4 条记录` |
-| Failure keeps strip, shows error, re-enables | **partial** | code path reviewed; no fault injection |
+| Failure keeps strip, shows error, re-enables | verified | check 17; external DB write lock, DB unchanged |
 | Reset on hide | verified | check 10 |
 | 50% opacity legible | verified | check 14 |
 | Reduced motion | code inspection only | CSS `prefers-reduced-motion` guard |
-| 150% DPI | **not tested** | only 100% panel capture |
-| Screen reader announcement | **partial** | UIA sees the `role="status"` text; no screen-reader manual pass |
+| 150% DPI | verified by simulation | check 18; 1.5× render at 630×900; real OS DPI switch not performed |
+| Screen reader announcement | downgraded / not required | maintainer explicitly excluded this check; `role="status"` markup retained, no human AT pass |
 
 ### R-02 — scoped network claim
 
@@ -142,22 +155,20 @@ dump was removed). The automation script itself lives in the gitignored
 |---|---|---|
 | Rust unit test clears pins and image/thumbnail files | verified | `clear_removes_pins_and_image_files`; 68/68 tests pass |
 | Runbook with isolated `PPCLIP_DATA_DIR` | verified | this file |
-| Every R-01 criterion has an evidence row/verdict | verified | table above; three residuals called out |
+| Every R-01 criterion has an evidence row/verdict | verified | table above; remaining notes are non-blocking |
 
 ## Residual risks and follow-ups
 
-1. **Failure path not injected.** The catch keeps the strip open, shows the
-   existing error strip, and re-enables the buttons, but no real write failure was
-   reproduced. Before release, simulate a failing DB write or add a test seam.
-2. **Screen reader not manually exercised.** The live region is now always
-   mounted with `role="status" aria-live="polite"` and the visible toast is
-   hidden with `:empty`; UIA found the text, but NVDA/Windows Narrator was not run.
-3. **DPI coverage.** 100% only; 150% (the project's common dev scaling) still
-   needs a screenshot.
-4. **Toast placement.** The 2.4s success toast sits over the filter row; it is
+1. **Real OS 150% DPI switch not performed.** The 1.5× render was simulated with
+   WebView2 device scale plus a 630×900 physical window; layout and copy were
+   correct. A real display-scaling switch is a low-risk manual check.
+2. **Screen reader intentionally excluded.** The maintainer decided not to gate
+   this release on a screen-reader pass. The `role="status" aria-live="polite"`
+   markup is retained; no NVDA/Narrator narration was performed.
+3. **Toast placement.** The 2.4s success toast sits over the filter row; it is
    legible but slightly covers the filters. Acceptable for this pilot, noted for
    UI polish.
-5. **Custom data dir under `%TEMP%`/`%LOCALAPPDATA%`.** WebView2 failed in this
+4. **Custom data dir under `%TEMP%`/`%LOCALAPPDATA%`.** WebView2 failed in this
    sandboxed session; repo-local path worked. Normal app data dir works. Treat as
    a separate environment/follow-up, not part of R-01.
 
@@ -165,8 +176,9 @@ dump was removed). The automation script itself lives in the gitignored
 
 - Maintainer: purejiang
 - Date: 2026-10-22
-- Decision: **accept with residuals**. Failure injection, manual screen-reader
-  pass, and 150% DPI remain open and are listed above; release is explicitly
-  deferred to a separate decision.
+- Decision: **accept for release**, with non-blocking notes: screen-reader
+  verification is explicitly excluded by the maintainer; real OS 150% DPI
+  switching was simulated, not switched; toast/custom-dir observations remain.
 - Scope: implementation and this acceptance record. Sign-off does **not**
-  authorize push, tag, release, or any GitHub write.
+  authorize push, tag, release, or any GitHub write; those require a separate
+  explicit go-ahead.
